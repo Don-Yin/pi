@@ -196,9 +196,12 @@ export class TuiMainScreen extends TuiBase implements TUI {
 		// Render all components to get new lines
 		let newLines = this.render(width);
 
-		// Composite overlays into the rendered lines (before differential compare)
+		// Composite overlays into the rendered lines (before differential compare).
+		// Keep the current viewport height stable during content shrink so viewport-
+		// anchored overlays do not move to earlier line indices and force a full redraw.
 		if (this.hasOverlayEntries) {
-			newLines = this.compositeOverlays(newLines, width, height);
+			const workingHeightFloor = widthChanged || heightChanged ? 0 : previousBufferLength;
+			newLines = this.compositeOverlays(newLines, width, height, workingHeightFloor);
 		}
 
 		// Extract cursor position before applying line resets (marker must be found first)

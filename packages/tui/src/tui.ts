@@ -1096,7 +1096,12 @@ export abstract class TuiBase extends Container implements TUI {
 	}
 
 	/** Composite all overlays into content lines (sorted by focusOrder, higher = on top). */
-	protected compositeOverlays(lines: string[], termWidth: number, termHeight: number): string[] {
+	protected compositeOverlays(
+		lines: string[],
+		termWidth: number,
+		termHeight: number,
+		workingHeightFloor = 0,
+	): string[] {
 		if (this.overlayStack.length === 0) return lines;
 		const result = [...lines];
 
@@ -1105,6 +1110,7 @@ export abstract class TuiBase extends Container implements TUI {
 		let minLinesNeeded = result.length;
 
 		const visibleEntries = this.overlayStack.filter((e) => this.isOverlayVisible(e));
+		if (visibleEntries.length === 0) return lines;
 		visibleEntries.sort((a, b) => a.focusOrder - b.focusOrder);
 		for (const entry of visibleEntries) {
 			const { component, options } = entry;
@@ -1131,7 +1137,7 @@ export abstract class TuiBase extends Container implements TUI {
 		// Pad to at least terminal height so overlays have screen-relative positions.
 		// Excludes maxLinesRendered: the historical high-water mark caused self-reinforcing
 		// inflation that pushed content into scrollback on terminal widen.
-		const workingHeight = Math.max(result.length, termHeight, minLinesNeeded);
+		const workingHeight = Math.max(result.length, termHeight, minLinesNeeded, workingHeightFloor);
 
 		// Extend result with empty lines if content is too short for overlay placement or working area
 		while (result.length < workingHeight) {
