@@ -1323,12 +1323,6 @@ export class InteractiveMode {
 		return result;
 	}
 
-	private formatExtensionDisplayPath(path: string): string {
-		let result = this.formatDisplayPath(path);
-		result = result.replace(/\/index\.ts$/, "").replace(/\/index\.js$/, "");
-		return result;
-	}
-
 	private formatContextPath(p: string): string {
 		const cwd = path.resolve(this.sessionManager.getCwd());
 		const absolutePath = path.isAbsolute(p) ? path.resolve(p) : path.resolve(cwd, p);
@@ -1722,6 +1716,31 @@ export class InteractiveMode {
 			this.loadedResourcesContainer.addChild(section);
 			this.loadedResourcesContainer.addChild(new Spacer(1));
 		};
+		// harness-pi: visual prompt token and lifecycle hook tables
+		const formatPromptTokenTable = (templates: typeof this.session.promptTemplates): string => {
+			const rows = templates
+				.map((template) => ({
+					name: `/${template.name}`,
+					tokens: Math.ceil(template.content.length / 4),
+				}))
+				.sort((a, b) => a.name.localeCompare(b.name));
+			const tokenLabels = rows.map((row) => row.tokens.toLocaleString("en-US"));
+			const total = rows.reduce((sum, row) => sum + row.tokens, 0).toLocaleString("en-US");
+			const nameWidth = Math.max("Prompt".length, ...rows.map((row) => row.name.length));
+			const tokenWidth = Math.max("Tokens".length, total.length, ...tokenLabels.map((value) => value.length));
+			const horizontal = (left: string, middle: string, right: string): string =>
+				`  ${left}${"─".repeat(nameWidth + 2)}${middle}${"─".repeat(tokenWidth + 2)}${right}`;
+			const row = (name: string, tokens: string): string =>
+				`  │ ${name.padEnd(nameWidth)} │ ${tokens.padStart(tokenWidth)} │`;
+			return [
+				theme.fg("muted", `  ${rows.length.toLocaleString("en-US")} prompts  ·  ~${total} initial tokens`),
+				theme.fg("muted", horizontal("╭", "┬", "╮")),
+				theme.fg("muted", row("Prompt", "Tokens")),
+				theme.fg("muted", horizontal("├", "┼", "┤")),
+				...rows.map((item, index) => theme.fg("dim", row(item.name, tokenLabels[index]!))),
+				theme.fg("muted", horizontal("╰", "┴", "╯")),
+			].join("\n");
+		};
 
 		const skillsResult = this.session.resourceLoader.getSkills();
 		const promptsResult = this.session.resourceLoader.getPrompts();
@@ -1778,46 +1797,232 @@ export class InteractiveMode {
 
 			const skills = skillsResult.skills;
 			if (skills.length > 0) {
-				const groups = this.buildScopeGroups(
-					skills.map((skill) => ({ path: skill.filePath, sourceInfo: skill.sourceInfo })),
+				this.loadedResourcesContainer.addChild(
+					new Text(`${sectionHeader("Skills")} ${theme.fg("dim", skills.length.toLocaleString("en-US"))}`, 0, 0),
 				);
-				const skillList = this.formatScopeGroups(groups, {
-					formatPath: (item) => this.formatDisplayPath(item.path),
-					formatPackagePath: (item) => this.getShortPath(item.path, item.sourceInfo),
-				});
-				const skillCompactList = formatCompactList(skills.map((skill) => skill.name));
-				addLoadedSection("Skills", skillCompactList, skillList);
+				this.loadedResourcesContainer.addChild(new Spacer(1));
 			}
 
 			const templates = this.session.promptTemplates;
 			if (templates.length > 0) {
-				const groups = this.buildScopeGroups(
-					templates.map((template) => ({ path: template.filePath, sourceInfo: template.sourceInfo })),
+				const promptTokenTable = formatPromptTokenTable(templates);
+				addLoadedSection("Prompts", promptTokenTable, promptTokenTable);
+			}
+
+			const hookCounts = new Map<string, number>();
+			for (const extension of this.session.resourceLoader.getExtensions().extensions) {
+				if (extension.hidden || !extension.handlers) continue;
+				for (const [eventName, registered] of extension.handlers) {
+					if (!registered || registered.length === 0) continue;
+					hookCounts.set(eventName, (hookCounts.get(eventName) ?? 0) + registered.length);
+				}
+			}
+			if (hookCounts.size > 0) {
+				const hookPhases: Array<[string, string[]]> = [
+					["Startup", ["project_trust", "session_start", "resources_discover"]],
+					[
+						"Session",
+						[
+							"session_info_changed",
+							"session_before_switch",
+							"session_before_fork",
+							"session_before_compact",
+							"session_compact",
+							"session_before_tree",
+							"session_tree",
+							"session_shutdown",
+						],
+					],
+					["Prompt & agent", ["input", "before_agent_start", "agent_start", "agent_end", "agent_settled"]],
+					[
+						"Provider",
+						[
+							"before_provider_headers",
+							"before_provider_request",
+							"after_provider_response",
+							"model_select",
+							"thinking_level_select",
+						],
+					],
+					[
+						"Messages & turns",
+						["turn_start", "context", "message_start", "message_update", "message_end", "turn_end"],
+					],
+					[
+						"Tools & shell",
+						[
+							"tool_execution_start",
+							"tool_call",
+							"tool_execution_update",
+							"tool_result",
+							"tool_execution_end",
+							"user_bash",
+						],
+					],
+				];
+				const knownEvents = new Set(hookPhases.flatMap(([, events]) => events));
+				const otherEvents = [...hookCounts.keys()]
+					.filter((name) => !knownEvents.has(name))
+					.sort((a, b) => a.localeCompare(b));
+				if (otherEvents.length > 0) hookPhases.push(["Other", otherEvents]);
+				const cards = hookPhases
+					.map(([label, events]) => ({ label, events: events.filter((eventName) => hookCounts.has(eventName)) }))
+					.filter((card) => card.events.length > 0);
+				const eventWidth = Math.max(
+					...cards.flatMap((card) => [card.label.length, ...card.events.map((name) => name.length)]),
 				);
-				const templateByPath = new Map(templates.map((t) => [t.filePath, t]));
-				const templateList = this.formatScopeGroups(groups, {
-					formatPath: (item) => {
-						const template = templateByPath.get(item.path);
-						return template ? `/${template.name}` : this.formatDisplayPath(item.path);
-					},
-					formatPackagePath: (item) => {
-						const template = templateByPath.get(item.path);
-						return template ? `/${template.name}` : this.formatDisplayPath(item.path);
-					},
-				});
-				const promptCompactList = formatCompactList(templates.map((template) => `/${template.name}`));
-				addLoadedSection("Prompts", promptCompactList, templateList);
+				const countWidth = Math.max(
+					...[...hookCounts.values()].map((count) => count.toLocaleString("en-US").length),
+				);
+				const interiorWidth = eventWidth + countWidth + 4;
+				const hookLines: string[] = [];
+				for (let index = 0; index < cards.length; index += 3) {
+					const cardRow = cards.slice(index, index + 3);
+					const bodyHeight = Math.max(...cardRow.map((card) => card.events.length));
+					hookLines.push(
+						`  ${cardRow.map((card) => theme.fg("muted", `╭─ ${card.label} ${"─".repeat(interiorWidth - card.label.length - 3)}╮`)).join("  ")}`,
+					);
+					for (let lineIndex = 0; lineIndex < bodyHeight; lineIndex += 1) {
+						const columns = cardRow.map((card) => {
+							const eventName = card.events[lineIndex];
+							if (!eventName) return theme.fg("dim", `│${" ".repeat(interiorWidth)}│`);
+							const count = hookCounts.get(eventName)!.toLocaleString("en-US");
+							return theme.fg("dim", `│ ${eventName.padEnd(eventWidth)}  ${count.padStart(countWidth)} │`);
+						});
+						hookLines.push(`  ${columns.join("  ")}`);
+					}
+					hookLines.push(`  ${cardRow.map(() => theme.fg("muted", `╰${"─".repeat(interiorWidth)}╯`)).join("  ")}`);
+				}
+				const hookBody = hookLines.join("\n");
+				addLoadedSection("Hooks", hookBody, hookBody);
 			}
 
 			if (extensions.length > 0) {
-				const groups = this.buildScopeGroups(extensions);
-				const extList = this.formatScopeGroups(groups, {
-					formatPath: (item) => this.formatExtensionDisplayPath(item.path),
-					formatPackagePath: (item) =>
-						this.formatExtensionDisplayPath(this.getShortPath(item.path, item.sourceInfo)),
-				});
-				const extensionCompactList = formatCompactList(this.getCompactExtensionLabels(extensions));
-				addLoadedSection("Extensions", extensionCompactList, extList, "mdHeading");
+				const categoryDefinitions: Array<[string, Set<string>]> = [
+					[
+						"Workflow",
+						new Set([
+							"adaptive-batching",
+							"apple-device-control",
+							"coplan",
+							"expensive-bash-dedup",
+							"file-reminders",
+							"restart",
+							"scratch-reaper",
+							"thread-context",
+							"tmux-recover",
+						]),
+					],
+					[
+						"Safety & policy",
+						new Set([
+							"agent-process-gate",
+							"cross-session-repo-guard",
+							"diagnostic-root-cause-policy",
+							"generated-file-guard",
+							"kitty-launch-guard",
+							"python-environment-guard",
+							"session-skill-gate",
+							"status-circle",
+							"subagent-gate",
+						]),
+					],
+					[
+						"Quality",
+						new Set([
+							"markdown-quality",
+							"python-post-edit",
+							"writing-style",
+							"writing-style-avoid-ai-patterns",
+							"writing-style-avoid-ai-runner",
+						]),
+					],
+					[
+						"Observability & UI",
+						new Set([
+							"phoenix-telemetry",
+							"pi-command-timing",
+							"speak",
+							"time-sidebar",
+							"tokimon-hooks",
+							"tokimon-status",
+						]),
+					],
+					[
+						"Integrations",
+						new Set([
+							"apple-events",
+							"apple-mail",
+							"microsoft-word",
+							"pi-lens",
+							"pi-mcp-adapter",
+							"pi-mobile",
+							"pi-subagents",
+						]),
+					],
+				];
+				const categorized = new Map(categoryDefinitions.map(([label]) => [label, [] as string[]]));
+				const extensionLabels = this.getCompactExtensionLabels(extensions);
+				const otherExtensions: string[] = [];
+				for (const [index, extension] of extensions.entries()) {
+					const label =
+						extensionLabels[index] ?? this.getCompactExtensionLabel(extension.path, extension.sourceInfo);
+					const pathParts = extension.path.replace(/\\/g, "/").split("/");
+					const fileName = pathParts.at(-1) ?? extension.path;
+					const key = fileName.replace(/\.(?:[cm]?[jt]s|tsx?)$/, "");
+					const entryKey = key === "index" ? pathParts.at(-2) : key;
+					const category = categoryDefinitions.find(
+						([, names]) =>
+							names.has(key) ||
+							(entryKey !== undefined && names.has(entryKey)) ||
+							[...names].some(
+								(name) =>
+									label === name ||
+									label.startsWith(`${name}:`) ||
+									label.startsWith(`${name}@`) ||
+									label.includes(`/${name}`),
+							),
+					);
+					if (category) categorized.get(category[0])!.push(label);
+					else otherExtensions.push(label);
+				}
+				const cards = categoryDefinitions
+					.map(([label]) => ({ label, extensions: categorized.get(label)!.sort((a, b) => a.localeCompare(b)) }))
+					.filter((card) => card.extensions.length > 0);
+				if (otherExtensions.length > 0)
+					cards.push({ label: "Other", extensions: otherExtensions.sort((a, b) => a.localeCompare(b)) });
+				const labelWidth = Math.max(
+					...cards.flatMap((card) => [card.label.length + 1, ...card.extensions.map((label) => label.length)]),
+				);
+				const interiorWidth = labelWidth + 2;
+				const extensionLines = [
+					theme.fg(
+						"muted",
+						`  ${extensions.length.toLocaleString("en-US")} extensions  ·  ${cards.length.toLocaleString("en-US")} categories`,
+					),
+				];
+				for (let index = 0; index < cards.length; index += 3) {
+					const cardRow = cards.slice(index, index + 3);
+					const bodyHeight = Math.max(...cardRow.map((card) => card.extensions.length));
+					extensionLines.push(
+						`  ${cardRow.map((card) => theme.fg("muted", `╭─ ${card.label} ${"─".repeat(interiorWidth - card.label.length - 3)}╮`)).join("  ")}`,
+					);
+					for (let lineIndex = 0; lineIndex < bodyHeight; lineIndex += 1) {
+						const columns = cardRow.map((card) => {
+							const label = card.extensions[lineIndex];
+							return theme.fg(
+								"dim",
+								label ? `│ ${label.padEnd(labelWidth)} │` : `│${" ".repeat(interiorWidth)}│`,
+							);
+						});
+						extensionLines.push(`  ${columns.join("  ")}`);
+					}
+					extensionLines.push(
+						`  ${cardRow.map(() => theme.fg("muted", `╰${"─".repeat(interiorWidth)}╯`)).join("  ")}`,
+					);
+				}
+				const extensionBody = extensionLines.join("\n");
+				addLoadedSection("Extensions", extensionBody, extensionBody, "mdHeading");
 			}
 
 			// Show loaded themes (excluding built-in)
@@ -4095,6 +4300,19 @@ export class InteractiveMode {
 	private async handleFollowUp(): Promise<void> {
 		const text = (this.editor.getExpandedText?.() ?? this.editor.getText()).trim();
 		if (!text) return;
+
+		// harness-pi: defer queued built-in commands until idle
+		const commandName = text.startsWith("/") ? text.slice(1).split(" ", 1)[0] : undefined;
+		if (
+			(this.session.isCompacting || this.session.isStreaming) &&
+			BUILTIN_SLASH_COMMANDS.some((command) => command.name === commandName)
+		) {
+			this.editor.addToHistory?.(text);
+			this.editor.setText("");
+			await this.session.waitForIdle();
+			await this.editor.onSubmit?.(text);
+			return;
+		}
 
 		// Queue input during compaction (extension commands execute immediately)
 		if (this.session.isCompacting) {
