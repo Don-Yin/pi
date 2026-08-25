@@ -89,7 +89,7 @@ import {
 	resolveModelScopeFromModels,
 } from "../../core/model-resolver.ts";
 import { CredentialSynchronizationError } from "../../core/model-runtime.ts";
-import { removeTransientRetryError } from "./retry-ui.ts";
+import { hideSupersededRetryErrors } from "./retry-ui.ts";
 import { DefaultPackageManager } from "../../core/package-manager.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
@@ -3656,10 +3656,8 @@ export class InteractiveMode {
 			}
 
 			case "auto_retry_start": {
-				this.retryErrorComponent = removeTransientRetryError(
-					this.chatContainer,
-					this.retryErrorComponent,
-				);
+				if (this.retryErrorComponent) this.chatContainer.removeChild(this.retryErrorComponent);
+				this.retryErrorComponent = undefined;
 				// Set up escape to abort retry
 				this.retryEscapeHandler = this.defaultEditor.onEscape;
 				this.defaultEditor.onEscape = () => {
@@ -3993,7 +3991,7 @@ export class InteractiveMode {
 		entries: SessionEntry[],
 		options: { updateFooter?: boolean; populateHistory?: boolean } = {},
 	): void {
-		const items = entries.flatMap((entry): RenderSessionItem[] => {
+		const items = hideSupersededRetryErrors(entries.flatMap((entry): RenderSessionItem[] => {
 			if (entry.type === "custom") {
 				return [entry];
 			}
@@ -4002,7 +4000,7 @@ export class InteractiveMode {
 				return [...messages, { type: "compaction_cost", kind: entry.type, usage: entry.usage }];
 			}
 			return messages;
-		});
+		}));
 		this.renderSessionItems(items, options);
 	}
 
