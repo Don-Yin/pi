@@ -88,6 +88,7 @@ import {
 	resolveModelScopeFromModels,
 } from "../../core/model-resolver.ts";
 import { CredentialSynchronizationError } from "../../core/model-runtime.ts";
+import { removeTransientRetryError } from "./retry-ui.ts";
 import { DefaultPackageManager } from "../../core/package-manager.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
@@ -485,6 +486,7 @@ export class InteractiveMode {
 
 	// Auto-retry state
 	private retryEscapeHandler?: () => void;
+	private retryErrorComponent?: AssistantMessageComponent;
 
 	// Messages queued while compaction is running
 	private compactionQueuedMessages: CompactionQueuedMessage[] = [];
@@ -3222,6 +3224,9 @@ export class InteractiveMode {
 					}
 					this.streamingComponent.updateContent(this.streamingMessage, false);
 
+					if (this.streamingMessage.stopReason === "error") {
+						this.retryErrorComponent = this.streamingComponent;
+					}
 					if (this.streamingMessage.stopReason === "aborted" || this.streamingMessage.stopReason === "error") {
 						if (!errorMessage) {
 							errorMessage = this.streamingMessage.errorMessage || "Error";
@@ -3367,6 +3372,10 @@ export class InteractiveMode {
 			}
 
 			case "auto_retry_start": {
+				this.retryErrorComponent = removeTransientRetryError(
+					this.chatContainer,
+					this.retryErrorComponent,
+				);
 				// Set up escape to abort retry
 				this.retryEscapeHandler = this.defaultEditor.onEscape;
 				this.defaultEditor.onEscape = () => {
