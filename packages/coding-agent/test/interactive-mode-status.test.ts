@@ -557,8 +557,6 @@ describe("InteractiveMode.showLoadedResources", () => {
 				},
 			},
 			formatDisplayPath: (p: string) => (InteractiveMode as any).prototype.formatDisplayPath.call(fakeThis, p),
-			formatExtensionDisplayPath: (p: string) =>
-				(InteractiveMode as any).prototype.formatExtensionDisplayPath.call(fakeThis, p),
 			formatContextPath: (p: string) => (InteractiveMode as any).prototype.formatContextPath.call(fakeThis, p),
 			getStartupExpansionState: () => (InteractiveMode as any).prototype.getStartupExpansionState.call(fakeThis),
 			buildScopeGroups: () => [],
@@ -699,7 +697,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 		];
 	}
 
-	test("shows a compact resource listing by default", () => {
+	test("shows only the skill count", () => {
 		const fakeThis = createShowLoadedResourcesThis({
 			quietStartup: false,
 			skills: [{ filePath: "/tmp/skill/SKILL.md", name: "commit" }],
@@ -711,11 +709,12 @@ describe("InteractiveMode.showLoadedResources", () => {
 
 		const output = renderAll(fakeThis.loadedResourcesContainer);
 		expect(output).toContain("[Skills]");
-		expect(output).toContain("commit");
+		expect(output).toContain("1");
+		expect(output).not.toContain("commit");
 		expect(output).not.toContain("resource-list");
 	});
 
-	test("shows full resource listing when expanded", () => {
+	test("keeps the skill count when startup sections are expanded", () => {
 		const fakeThis = createShowLoadedResourcesThis({
 			quietStartup: false,
 			toolOutputExpanded: true,
@@ -728,11 +727,12 @@ describe("InteractiveMode.showLoadedResources", () => {
 
 		const output = renderAll(fakeThis.loadedResourcesContainer);
 		expect(output).toContain("[Skills]");
-		expect(output).toContain("resource-list");
+		expect(output).toContain("1");
 		expect(output).not.toContain("commit");
+		expect(output).not.toContain("resource-list");
 	});
 
-	test("shows full resource listing on verbose startup even when tool output is collapsed", () => {
+	test("keeps the skill count on verbose startup", () => {
 		const fakeThis = createShowLoadedResourcesThis({
 			quietStartup: true,
 			verbose: true,
@@ -746,11 +746,12 @@ describe("InteractiveMode.showLoadedResources", () => {
 
 		const output = renderAll(fakeThis.loadedResourcesContainer);
 		expect(output).toContain("[Skills]");
-		expect(output).toContain("resource-list");
+		expect(output).toContain("1");
 		expect(output).not.toContain("commit");
+		expect(output).not.toContain("resource-list");
 	});
 
-	test("abbreviates extensions in compact listing", () => {
+	test("renders extensions in category cards", () => {
 		const fakeThis = createShowLoadedResourcesThis({
 			quietStartup: false,
 			extensions: [{ path: "/tmp/extensions/answer.ts" }, { path: "/tmp/extensions/btw.ts" }],
@@ -762,7 +763,9 @@ describe("InteractiveMode.showLoadedResources", () => {
 
 		const output = renderAll(fakeThis.loadedResourcesContainer);
 		expect(output).toContain("[Extensions]");
-		expect(output).toContain("answer.ts, btw.ts");
+		expect(output).toContain("2 extensions  ·  1 categories");
+		expect(output).toContain("answer.ts");
+		expect(output).toContain("btw.ts");
 		expect(output).not.toContain("extensions/answer.ts");
 	});
 
@@ -778,8 +781,19 @@ describe("InteractiveMode.showLoadedResources", () => {
 		});
 
 		expect(normalizeRenderedOutput(fakeThis.loadedResourcesContainer)).toMatchInlineSnapshot(`
-"[Extensions]
-  @scope/pi-scoped, answer.ts, cli-extension.ts, HazAT/pi-interactive-subagents, HazAT/pi-interactive-subagents:subagents, local-index, pi-markdown-preview, user-index"`);
+			"[Extensions]
+			  8 extensions  ·  1 categories
+			  ╭─ Other ──────────────────────────────────╮
+			  │ @scope/pi-scoped                         │
+			  │ answer.ts                                │
+			  │ cli-extension.ts                         │
+			  │ HazAT/pi-interactive-subagents           │
+			  │ HazAT/pi-interactive-subagents:subagents │
+			  │ local-index                              │
+			  │ pi-markdown-preview                      │
+			  │ user-index                               │
+			  ╰──────────────────────────────────────────╯"
+		`);
 	});
 
 	test("adds more parent folders until local extension labels are unique", () => {
@@ -824,8 +838,14 @@ describe("InteractiveMode.showLoadedResources", () => {
 		});
 
 		expect(normalizeRenderedOutput(fakeThis.loadedResourcesContainer)).toMatchInlineSnapshot(`
-"[Extensions]
-  alpha/one, beta/one, gamma/one"`);
+			"[Extensions]
+			  3 extensions  ·  1 categories
+			  ╭─ Other ───╮
+			  │ alpha/one │
+			  │ beta/one  │
+			  │ gamma/one │
+			  ╰───────────╯"
+		`);
 	});
 
 	test("strips index.ts from local extension label, showing parent dir", () => {
@@ -852,8 +872,12 @@ describe("InteractiveMode.showLoadedResources", () => {
 		});
 
 		expect(normalizeRenderedOutput(fakeThis.loadedResourcesContainer)).toMatchInlineSnapshot(`
-"[Extensions]
-  plan-mode"`);
+			"[Extensions]
+			  1 extensions  ·  1 categories
+			  ╭─ Other ───╮
+			  │ plan-mode │
+			  ╰───────────╯"
+		`);
 	});
 
 	test("strips index.js from local extension label, showing parent dir", () => {
@@ -880,8 +904,12 @@ describe("InteractiveMode.showLoadedResources", () => {
 		});
 
 		expect(normalizeRenderedOutput(fakeThis.loadedResourcesContainer)).toMatchInlineSnapshot(`
-"[Extensions]
-  plan-mode"`);
+			"[Extensions]
+			  1 extensions  ·  1 categories
+			  ╭─ Other ───╮
+			  │ plan-mode │
+			  ╰───────────╯"
+		`);
 	});
 
 	test("mixed single-file and subdirectory index.ts extensions strip index.ts", () => {
@@ -917,8 +945,13 @@ describe("InteractiveMode.showLoadedResources", () => {
 		});
 
 		expect(normalizeRenderedOutput(fakeThis.loadedResourcesContainer)).toMatchInlineSnapshot(`
-"[Extensions]
-  plan-mode, webfetch.ts"`);
+			"[Extensions]
+			  2 extensions  ·  1 categories
+			  ╭─ Other ─────╮
+			  │ plan-mode   │
+			  │ webfetch.ts │
+			  ╰─────────────╯"
+		`);
 	});
 
 	test("multiple index.ts with unique parent dirs need no disambiguation", () => {
@@ -954,8 +987,13 @@ describe("InteractiveMode.showLoadedResources", () => {
 		});
 
 		expect(normalizeRenderedOutput(fakeThis.loadedResourcesContainer)).toMatchInlineSnapshot(`
-"[Extensions]
-  bar, foo"`);
+			"[Extensions]
+			  2 extensions  ·  1 categories
+			  ╭─ Other ╮
+			  │ bar    │
+			  │ foo    │
+			  ╰────────╯"
+		`);
 	});
 
 	test("multiple index.ts with same parent dir name disambiguated with grandparent", () => {
@@ -991,8 +1029,13 @@ describe("InteractiveMode.showLoadedResources", () => {
 		});
 
 		expect(normalizeRenderedOutput(fakeThis.loadedResourcesContainer)).toMatchInlineSnapshot(`
-"[Extensions]
-  alpha/tools, beta/tools"`);
+			"[Extensions]
+			  2 extensions  ·  1 categories
+			  ╭─ Other ─────╮
+			  │ alpha/tools │
+			  │ beta/tools  │
+			  ╰─────────────╯"
+		`);
 	});
 
 	test("non-index file in subdirectory stays as filename", () => {
@@ -1019,8 +1062,12 @@ describe("InteractiveMode.showLoadedResources", () => {
 		});
 
 		expect(normalizeRenderedOutput(fakeThis.loadedResourcesContainer)).toMatchInlineSnapshot(`
-"[Extensions]
-  main.ts"`);
+			"[Extensions]
+			  1 extensions  ·  1 categories
+			  ╭─ Other ─╮
+			  │ main.ts │
+			  ╰─────────╯"
+		`);
 	});
 
 	test("package extensions still strip index.ts correctly (regression guard)", () => {
@@ -1047,8 +1094,12 @@ describe("InteractiveMode.showLoadedResources", () => {
 		});
 
 		expect(normalizeRenderedOutput(fakeThis.loadedResourcesContainer)).toMatchInlineSnapshot(`
-"[Extensions]
-  pi-markdown-preview"`);
+			"[Extensions]
+			  1 extensions  ·  1 categories
+			  ╭─ Other ─────────────╮
+			  │ pi-markdown-preview │
+			  ╰─────────────────────╯"
+		`);
 	});
 
 	test("labels npm sibling extensions relative to the declaring package", () => {
@@ -1084,8 +1135,13 @@ describe("InteractiveMode.showLoadedResources", () => {
 		});
 
 		expect(normalizeRenderedOutput(fakeThis.loadedResourcesContainer)).toMatchInlineSnapshot(`
-"[Extensions]
-  primary-package, primary-package:../sibling-package"`);
+			"[Extensions]
+			  2 extensions  ·  1 categories
+			  ╭─ Other ────────────────────────────╮
+			  │ primary-package                    │
+			  │ primary-package:../sibling-package │
+			  ╰────────────────────────────────────╯"
+		`);
 	});
 
 	test("labels Windows npm sibling extensions relative to the declaring package", () => {
@@ -1124,8 +1180,13 @@ describe("InteractiveMode.showLoadedResources", () => {
 		});
 
 		expect(normalizeRenderedOutput(fakeThis.loadedResourcesContainer)).toMatchInlineSnapshot(`
-"[Extensions]
-  primary-package, primary-package:../sibling-package"`);
+			"[Extensions]
+			  2 extensions  ·  1 categories
+			  ╭─ Other ────────────────────────────╮
+			  │ primary-package                    │
+			  │ primary-package:../sibling-package │
+			  ╰────────────────────────────────────╯"
+		`);
 	});
 
 	test("captures mixed extension layouts in expanded output", () => {
@@ -1141,21 +1202,19 @@ describe("InteractiveMode.showLoadedResources", () => {
 		});
 
 		expect(normalizeRenderedOutput(fakeThis.loadedResourcesContainer)).toMatchInlineSnapshot(`
-"[Extensions]
-  project
-    /tmp/project/.pi/extensions/answer.ts
-    /tmp/project/.pi/extensions/local-index
-    git:github.com/HazAT/pi-interactive-subagents
-      extensions
-      extensions/subagents
-    npm:@scope/pi-scoped
-      extensions
-    npm:pi-markdown-preview
-      extensions
-  user
-    /tmp/agent/extensions/user-index
-  path
-    /tmp/temp/cli-extension.ts"`);
+			"[Extensions]
+			  8 extensions  ·  1 categories
+			  ╭─ Other ──────────────────────────────────╮
+			  │ @scope/pi-scoped                         │
+			  │ answer.ts                                │
+			  │ cli-extension.ts                         │
+			  │ HazAT/pi-interactive-subagents           │
+			  │ HazAT/pi-interactive-subagents:subagents │
+			  │ local-index                              │
+			  │ pi-markdown-preview                      │
+			  │ user-index                               │
+			  ╰──────────────────────────────────────────╯"
+		`);
 	});
 
 	test("shows context paths relative to cwd while preserving full external paths", () => {

@@ -7,9 +7,9 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { AuthEvent, AuthPrompt } from "@earendil-works/pi-ai";
-import type { AssistantMessage, ImageContent, Message, Model } from "@earendil-works/pi-ai/compat";
+import type { AssistantMessage, ImageContent, Message, Model, Usage } from "@earendil-works/pi-ai/compat";
 import type {
 	AutocompleteItem,
 	AutocompleteProvider,
@@ -44,7 +44,7 @@ import {
 	visibleWidth,
 } from "@earendil-works/pi-tui";
 import chalk from "chalk";
-import { spawn, spawnSync } from "child_process";
+import { spawn } from "child_process";
 import {
 	APP_NAME,
 	APP_TITLE,
@@ -53,11 +53,11 @@ import {
 	getAuthPath,
 	getDebugLogPath,
 	getDocsPath,
-	getShareViewerUrl,
 	VERSION,
 } from "../../config.ts";
 import { type AgentSession, type AgentSessionEvent, parseSkillBlock } from "../../core/agent-session.ts";
 import { type AgentSessionRuntime, SessionImportFileNotFoundError } from "../../core/agent-session-runtime.ts";
+import type { AgentSessionRuntimeDiagnostic } from "../../core/agent-session-services.ts";
 import {
 	CACHE_TTL_MS,
 	type CacheMiss,
@@ -65,6 +65,7 @@ import {
 	computeCacheWaste,
 	detectCacheMiss,
 } from "../../core/cache-stats.ts";
+import { DEFAULT_THINKING_LEVEL, THINKING_LEVEL_OPTIONS } from "../../core/defaults.ts";
 import type {
 	AutocompleteProviderFactory,
 	EditorFactory,
@@ -108,12 +109,12 @@ import { openBrowser } from "../../utils/open-browser.ts";
 import { getCwdRelativePath } from "../../utils/paths.ts";
 import { getPiUserAgent } from "../../utils/pi-user-agent.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
+import { loadAllHighlightLanguages } from "../../utils/syntax-highlight.ts";
 import { ensureTool, type ToolStatus } from "../../utils/tools-manager.ts";
 import { checkForNewPiVersion, type LatestPiRelease } from "../../utils/version-check.ts";
 import { ArminComponent } from "./components/armin.ts";
 import { AssistantMessageComponent } from "./components/assistant-message.ts";
 import { BashExecutionComponent } from "./components/bash-execution.ts";
-import { BorderedLoader } from "./components/bordered-loader.ts";
 import { BranchSummaryMessageComponent } from "./components/branch-summary-message.ts";
 import { CompactionSummaryMessageComponent } from "./components/compaction-summary-message.ts";
 import { CustomEditor } from "./components/custom-editor.ts";
@@ -147,6 +148,7 @@ import {
 	type StatusIndicator,
 	WorkingStatusIndicator,
 } from "./components/status-indicator.ts";
+import { ThinkingSelectorComponent } from "./components/thinking-selector.ts";
 import { ToolExecutionComponent } from "./components/tool-execution.ts";
 import { TreeSelectorComponent } from "./components/tree-selector.ts";
 import { TrustSelectorComponent } from "./components/trust-selector.ts";
@@ -155,6 +157,7 @@ import { UserMessageSelectorComponent } from "./components/user-message-selector
 import { editInExternalEditor } from "./external-editor.ts";
 import { refreshModelCatalogs } from "./model-catalog-refresh.ts";
 import { getModelSearchText } from "./model-search.ts";
+import { shareSession } from "./session-share.ts";
 import {
 	getAvailableThemes,
 	getAvailableThemesWithPaths,
@@ -205,10 +208,20 @@ type CompactionQueuedMessage = {
 	mode: "steer" | "followUp";
 };
 
-type RenderSessionItem = AgentMessage | Extract<SessionEntry, { type: "custom" }>;
+type CompactionCostNotice = {
+	type: "compaction_cost";
+	kind: "compaction" | "branch_summary";
+	usage: Usage;
+};
+
+type RenderSessionItem = AgentMessage | Extract<SessionEntry, { type: "custom" }> | CompactionCostNotice;
 
 function isCustomSessionEntry(item: RenderSessionItem): item is Extract<SessionEntry, { type: "custom" }> {
 	return "type" in item && item.type === "custom";
+}
+
+function isCompactionCostNotice(item: RenderSessionItem): item is CompactionCostNotice {
+	return "type" in item && item.type === "compaction_cost";
 }
 
 const DEAD_TERMINAL_ERROR_CODES = new Set(["EIO", "EPIPE", "ENOTCONN"]);
@@ -256,6 +269,12 @@ export function formatResumeCommand(sessionManager: SessionManager): string | un
 
 function hasDefaultModelProvider(providerId: string): providerId is keyof typeof defaultModelPerProvider {
 	return providerId in defaultModelPerProvider;
+}
+
+function llamaCppPostLoginGuidance(actionLabel: string, loadedModelCount: number): string {
+	return loadedModelCount === 0
+		? `${actionLabel}. No llama.cpp models are loaded. Use /llama to load a model, then /model to select it.`
+		: `${actionLabel}. Use /model to select a loaded llama.cpp model, or /llama to manage models.`;
 }
 
 type LoginProviderCompletionOption = {
@@ -317,6 +336,8 @@ function formatLoginProviderCompletionDescription(provider: LoginProviderComplet
 export interface InteractiveModeOptions {
 	/** Providers that were migrated to auth.json (shows warning) */
 	migratedProviders?: string[];
+	/** Diagnostics collected before the interactive TUI was initialized. */
+	startupDiagnostics?: AgentSessionRuntimeDiagnostic[];
 	/** Warning message if session model couldn't be restored */
 	modelFallbackMessage?: string;
 	/** Cwd to trust after reload if it gained a .pi directory during this implicitly trusted session. */
@@ -687,6 +708,21 @@ export class InteractiveMode {
 			};
 		}
 
+		const thinkingCommand = slashCommands.find((command) => command.name === "thinking");
+		if (thinkingCommand) {
+			thinkingCommand.getArgumentCompletions = (prefix: string): AutocompleteItem[] | null => {
+				return createFuzzyAutocompleteItems(
+					this.session.getAvailableThinkingLevels(),
+					prefix,
+					(level) => level,
+					(level) => ({
+						value: level,
+						label: level,
+					}),
+				);
+			};
+		}
+
 		const loginCommand = slashCommands.find((command) => command.name === "login");
 		if (loginCommand) {
 			loginCommand.getArgumentCompletions = (prefix: string): AutocompleteItem[] | null => {
@@ -1015,6 +1051,14 @@ export class InteractiveMode {
 
 		// Initialize available provider count for footer display
 		await this.updateAvailableProviderCount();
+
+		// Flush the completed startup state before loading the remaining syntax grammars.
+		this.ui.renderNow();
+		void loadAllHighlightLanguages().then(() => {
+			if (!this.isInitialized) return;
+			this.ui.invalidate();
+			this.ui.requestRender();
+		});
 	}
 
 	/**
@@ -1076,7 +1120,24 @@ export class InteractiveMode {
 		});
 
 		// Show startup warnings
-		const { migratedProviders, modelFallbackMessage, initialMessage, initialImages, initialMessages } = this.options;
+		const {
+			migratedProviders,
+			startupDiagnostics,
+			modelFallbackMessage,
+			initialMessage,
+			initialImages,
+			initialMessages,
+		} = this.options;
+
+		for (const diagnostic of startupDiagnostics ?? []) {
+			if (diagnostic.type === "error") {
+				this.showError(diagnostic.message);
+			} else if (diagnostic.type === "warning") {
+				this.showWarning(diagnostic.message);
+			} else {
+				this.showStatus(diagnostic.message);
+			}
+		}
 
 		if (migratedProviders && migratedProviders.length > 0) {
 			this.showWarning(`Migrated credentials to auth.json: ${migratedProviders.join(", ")}`);
@@ -1261,12 +1322,6 @@ export class InteractiveMode {
 			result = `~${result.slice(home.length)}`;
 		}
 
-		return result;
-	}
-
-	private formatExtensionDisplayPath(path: string): string {
-		let result = this.formatDisplayPath(path);
-		result = result.replace(/\/index\.ts$/, "").replace(/\/index\.js$/, "");
 		return result;
 	}
 
@@ -1663,6 +1718,31 @@ export class InteractiveMode {
 			this.loadedResourcesContainer.addChild(section);
 			this.loadedResourcesContainer.addChild(new Spacer(1));
 		};
+		// harness-pi: visual prompt token and lifecycle hook tables
+		const formatPromptTokenTable = (templates: typeof this.session.promptTemplates): string => {
+			const rows = templates
+				.map((template) => ({
+					name: `/${template.name}`,
+					tokens: Math.ceil(template.content.length / 4),
+				}))
+				.sort((a, b) => a.name.localeCompare(b.name));
+			const tokenLabels = rows.map((row) => row.tokens.toLocaleString("en-US"));
+			const total = rows.reduce((sum, row) => sum + row.tokens, 0).toLocaleString("en-US");
+			const nameWidth = Math.max("Prompt".length, ...rows.map((row) => row.name.length));
+			const tokenWidth = Math.max("Tokens".length, total.length, ...tokenLabels.map((value) => value.length));
+			const horizontal = (left: string, middle: string, right: string): string =>
+				`  ${left}${"─".repeat(nameWidth + 2)}${middle}${"─".repeat(tokenWidth + 2)}${right}`;
+			const row = (name: string, tokens: string): string =>
+				`  │ ${name.padEnd(nameWidth)} │ ${tokens.padStart(tokenWidth)} │`;
+			return [
+				theme.fg("muted", `  ${rows.length.toLocaleString("en-US")} prompts  ·  ~${total} initial tokens`),
+				theme.fg("muted", horizontal("╭", "┬", "╮")),
+				theme.fg("muted", row("Prompt", "Tokens")),
+				theme.fg("muted", horizontal("├", "┼", "┤")),
+				...rows.map((item, index) => theme.fg("dim", row(item.name, tokenLabels[index]!))),
+				theme.fg("muted", horizontal("╰", "┴", "╯")),
+			].join("\n");
+		};
 
 		const skillsResult = this.session.resourceLoader.getSkills();
 		const promptsResult = this.session.resourceLoader.getPrompts();
@@ -1719,46 +1799,232 @@ export class InteractiveMode {
 
 			const skills = skillsResult.skills;
 			if (skills.length > 0) {
-				const groups = this.buildScopeGroups(
-					skills.map((skill) => ({ path: skill.filePath, sourceInfo: skill.sourceInfo })),
+				this.loadedResourcesContainer.addChild(
+					new Text(`${sectionHeader("Skills")} ${theme.fg("dim", skills.length.toLocaleString("en-US"))}`, 0, 0),
 				);
-				const skillList = this.formatScopeGroups(groups, {
-					formatPath: (item) => this.formatDisplayPath(item.path),
-					formatPackagePath: (item) => this.getShortPath(item.path, item.sourceInfo),
-				});
-				const skillCompactList = formatCompactList(skills.map((skill) => skill.name));
-				addLoadedSection("Skills", skillCompactList, skillList);
+				this.loadedResourcesContainer.addChild(new Spacer(1));
 			}
 
 			const templates = this.session.promptTemplates;
 			if (templates.length > 0) {
-				const groups = this.buildScopeGroups(
-					templates.map((template) => ({ path: template.filePath, sourceInfo: template.sourceInfo })),
+				const promptTokenTable = formatPromptTokenTable(templates);
+				addLoadedSection("Prompts", promptTokenTable, promptTokenTable);
+			}
+
+			const hookCounts = new Map<string, number>();
+			for (const extension of this.session.resourceLoader.getExtensions().extensions) {
+				if (extension.hidden || !extension.handlers) continue;
+				for (const [eventName, registered] of extension.handlers) {
+					if (!registered || registered.length === 0) continue;
+					hookCounts.set(eventName, (hookCounts.get(eventName) ?? 0) + registered.length);
+				}
+			}
+			if (hookCounts.size > 0) {
+				const hookPhases: Array<[string, string[]]> = [
+					["Startup", ["project_trust", "session_start", "resources_discover"]],
+					[
+						"Session",
+						[
+							"session_info_changed",
+							"session_before_switch",
+							"session_before_fork",
+							"session_before_compact",
+							"session_compact",
+							"session_before_tree",
+							"session_tree",
+							"session_shutdown",
+						],
+					],
+					["Prompt & agent", ["input", "before_agent_start", "agent_start", "agent_end", "agent_settled"]],
+					[
+						"Provider",
+						[
+							"before_provider_headers",
+							"before_provider_request",
+							"after_provider_response",
+							"model_select",
+							"thinking_level_select",
+						],
+					],
+					[
+						"Messages & turns",
+						["turn_start", "context", "message_start", "message_update", "message_end", "turn_end"],
+					],
+					[
+						"Tools & shell",
+						[
+							"tool_execution_start",
+							"tool_call",
+							"tool_execution_update",
+							"tool_result",
+							"tool_execution_end",
+							"user_bash",
+						],
+					],
+				];
+				const knownEvents = new Set(hookPhases.flatMap(([, events]) => events));
+				const otherEvents = [...hookCounts.keys()]
+					.filter((name) => !knownEvents.has(name))
+					.sort((a, b) => a.localeCompare(b));
+				if (otherEvents.length > 0) hookPhases.push(["Other", otherEvents]);
+				const cards = hookPhases
+					.map(([label, events]) => ({ label, events: events.filter((eventName) => hookCounts.has(eventName)) }))
+					.filter((card) => card.events.length > 0);
+				const eventWidth = Math.max(
+					...cards.flatMap((card) => [card.label.length, ...card.events.map((name) => name.length)]),
 				);
-				const templateByPath = new Map(templates.map((t) => [t.filePath, t]));
-				const templateList = this.formatScopeGroups(groups, {
-					formatPath: (item) => {
-						const template = templateByPath.get(item.path);
-						return template ? `/${template.name}` : this.formatDisplayPath(item.path);
-					},
-					formatPackagePath: (item) => {
-						const template = templateByPath.get(item.path);
-						return template ? `/${template.name}` : this.formatDisplayPath(item.path);
-					},
-				});
-				const promptCompactList = formatCompactList(templates.map((template) => `/${template.name}`));
-				addLoadedSection("Prompts", promptCompactList, templateList);
+				const countWidth = Math.max(
+					...[...hookCounts.values()].map((count) => count.toLocaleString("en-US").length),
+				);
+				const interiorWidth = eventWidth + countWidth + 4;
+				const hookLines: string[] = [];
+				for (let index = 0; index < cards.length; index += 3) {
+					const cardRow = cards.slice(index, index + 3);
+					const bodyHeight = Math.max(...cardRow.map((card) => card.events.length));
+					hookLines.push(
+						`  ${cardRow.map((card) => theme.fg("muted", `╭─ ${card.label} ${"─".repeat(interiorWidth - card.label.length - 3)}╮`)).join("  ")}`,
+					);
+					for (let lineIndex = 0; lineIndex < bodyHeight; lineIndex += 1) {
+						const columns = cardRow.map((card) => {
+							const eventName = card.events[lineIndex];
+							if (!eventName) return theme.fg("dim", `│${" ".repeat(interiorWidth)}│`);
+							const count = hookCounts.get(eventName)!.toLocaleString("en-US");
+							return theme.fg("dim", `│ ${eventName.padEnd(eventWidth)}  ${count.padStart(countWidth)} │`);
+						});
+						hookLines.push(`  ${columns.join("  ")}`);
+					}
+					hookLines.push(`  ${cardRow.map(() => theme.fg("muted", `╰${"─".repeat(interiorWidth)}╯`)).join("  ")}`);
+				}
+				const hookBody = hookLines.join("\n");
+				addLoadedSection("Hooks", hookBody, hookBody);
 			}
 
 			if (extensions.length > 0) {
-				const groups = this.buildScopeGroups(extensions);
-				const extList = this.formatScopeGroups(groups, {
-					formatPath: (item) => this.formatExtensionDisplayPath(item.path),
-					formatPackagePath: (item) =>
-						this.formatExtensionDisplayPath(this.getShortPath(item.path, item.sourceInfo)),
-				});
-				const extensionCompactList = formatCompactList(this.getCompactExtensionLabels(extensions));
-				addLoadedSection("Extensions", extensionCompactList, extList, "mdHeading");
+				const categoryDefinitions: Array<[string, Set<string>]> = [
+					[
+						"Workflow",
+						new Set([
+							"adaptive-batching",
+							"apple-device-control",
+							"coplan",
+							"expensive-bash-dedup",
+							"file-reminders",
+							"restart",
+							"scratch-reaper",
+							"thread-context",
+							"tmux-recover",
+						]),
+					],
+					[
+						"Safety & policy",
+						new Set([
+							"agent-process-gate",
+							"cross-session-repo-guard",
+							"diagnostic-root-cause-policy",
+							"generated-file-guard",
+							"kitty-launch-guard",
+							"python-environment-guard",
+							"session-skill-gate",
+							"status-circle",
+							"subagent-gate",
+						]),
+					],
+					[
+						"Quality",
+						new Set([
+							"markdown-quality",
+							"python-post-edit",
+							"writing-style",
+							"writing-style-avoid-ai-patterns",
+							"writing-style-avoid-ai-runner",
+						]),
+					],
+					[
+						"Observability & UI",
+						new Set([
+							"phoenix-telemetry",
+							"pi-command-timing",
+							"speak",
+							"time-sidebar",
+							"tokimon-hooks",
+							"tokimon-status",
+						]),
+					],
+					[
+						"Integrations",
+						new Set([
+							"apple-events",
+							"apple-mail",
+							"microsoft-word",
+							"pi-lens",
+							"pi-mcp-adapter",
+							"pi-mobile",
+							"pi-subagents",
+						]),
+					],
+				];
+				const categorized = new Map(categoryDefinitions.map(([label]) => [label, [] as string[]]));
+				const extensionLabels = this.getCompactExtensionLabels(extensions);
+				const otherExtensions: string[] = [];
+				for (const [index, extension] of extensions.entries()) {
+					const label =
+						extensionLabels[index] ?? this.getCompactExtensionLabel(extension.path, extension.sourceInfo);
+					const pathParts = extension.path.replace(/\\/g, "/").split("/");
+					const fileName = pathParts.at(-1) ?? extension.path;
+					const key = fileName.replace(/\.(?:[cm]?[jt]s|tsx?)$/, "");
+					const entryKey = key === "index" ? pathParts.at(-2) : key;
+					const category = categoryDefinitions.find(
+						([, names]) =>
+							names.has(key) ||
+							(entryKey !== undefined && names.has(entryKey)) ||
+							[...names].some(
+								(name) =>
+									label === name ||
+									label.startsWith(`${name}:`) ||
+									label.startsWith(`${name}@`) ||
+									label.includes(`/${name}`),
+							),
+					);
+					if (category) categorized.get(category[0])!.push(label);
+					else otherExtensions.push(label);
+				}
+				const cards = categoryDefinitions
+					.map(([label]) => ({ label, extensions: categorized.get(label)!.sort((a, b) => a.localeCompare(b)) }))
+					.filter((card) => card.extensions.length > 0);
+				if (otherExtensions.length > 0)
+					cards.push({ label: "Other", extensions: otherExtensions.sort((a, b) => a.localeCompare(b)) });
+				const labelWidth = Math.max(
+					...cards.flatMap((card) => [card.label.length + 1, ...card.extensions.map((label) => label.length)]),
+				);
+				const interiorWidth = labelWidth + 2;
+				const extensionLines = [
+					theme.fg(
+						"muted",
+						`  ${extensions.length.toLocaleString("en-US")} extensions  ·  ${cards.length.toLocaleString("en-US")} categories`,
+					),
+				];
+				for (let index = 0; index < cards.length; index += 3) {
+					const cardRow = cards.slice(index, index + 3);
+					const bodyHeight = Math.max(...cardRow.map((card) => card.extensions.length));
+					extensionLines.push(
+						`  ${cardRow.map((card) => theme.fg("muted", `╭─ ${card.label} ${"─".repeat(interiorWidth - card.label.length - 3)}╮`)).join("  ")}`,
+					);
+					for (let lineIndex = 0; lineIndex < bodyHeight; lineIndex += 1) {
+						const columns = cardRow.map((card) => {
+							const label = card.extensions[lineIndex];
+							return theme.fg(
+								"dim",
+								label ? `│ ${label.padEnd(labelWidth)} │` : `│${" ".repeat(interiorWidth)}│`,
+							);
+						});
+						extensionLines.push(`  ${columns.join("  ")}`);
+					}
+					extensionLines.push(
+						`  ${cardRow.map(() => theme.fg("muted", `╰${"─".repeat(interiorWidth)}╯`)).join("  ")}`,
+					);
+				}
+				const extensionBody = extensionLines.join("\n");
+				addLoadedSection("Extensions", extensionBody, extensionBody, "mdHeading");
 			}
 
 			// Show loaded themes (excluding built-in)
@@ -2921,6 +3187,12 @@ export class InteractiveMode {
 				await this.handleModelCommand(searchTerm);
 				return;
 			}
+			if (text === "/thinking" || text.startsWith("/thinking ")) {
+				const searchTerm = text.startsWith("/thinking ") ? text.slice(10).trim() : undefined;
+				this.editor.setText("");
+				this.handleThinkingCommand(searchTerm);
+				return;
+			}
 			if (text === "/export" || text.startsWith("/export ")) {
 				await this.handleExportCommand(text);
 				this.editor.setText("");
@@ -3348,8 +3620,13 @@ export class InteractiveMode {
 						this.showStatus("Auto-compaction cancelled");
 					}
 				} else if (event.result) {
+					const entries = this.sessionManager.buildContextEntries();
+					if (entries[0]?.type !== "compaction") {
+						throw new Error("Completed compaction is missing from the session context");
+					}
 					this.chatContainer.clear();
-					this.rebuildChatFromMessages();
+					// The latest compaction is prepended for model context; append it below at its chronological position.
+					this.renderSessionEntries(entries.slice(1));
 					this.addMessageToChat(
 						createCompactionSummaryMessage(
 							event.result.summary,
@@ -3357,6 +3634,13 @@ export class InteractiveMode {
 							new Date().toISOString(),
 						),
 					);
+					if (event.result.usage) {
+						this.addCompactionCostNotice({
+							type: "compaction_cost",
+							kind: "compaction",
+							usage: event.result.usage,
+						});
+					}
 					this.footer.invalidate();
 				} else if (event.errorMessage) {
 					if (event.reason === "manual") {
@@ -3632,6 +3916,10 @@ export class InteractiveMode {
 				this.addCustomEntryToChat(item);
 				continue;
 			}
+			if (isCompactionCostNotice(item)) {
+				this.addCompactionCostNotice(item);
+				continue;
+			}
 
 			const message = item;
 			// Assistant messages need special handling for tool calls
@@ -3709,9 +3997,30 @@ export class InteractiveMode {
 			if (entry.type === "custom") {
 				return [entry];
 			}
-			return sessionEntryToContextMessages(entry);
+			const messages = sessionEntryToContextMessages(entry);
+			if ((entry.type === "compaction" || entry.type === "branch_summary") && entry.usage && messages.length > 0) {
+				return [...messages, { type: "compaction_cost", kind: entry.type, usage: entry.usage }];
+			}
+			return messages;
 		});
 		this.renderSessionItems(items, options);
+	}
+
+	/**
+	 * Render billing usage for a compaction or branch summary. The notice is derived
+	 * from persisted summary usage and is not stored as a separate session entry.
+	 */
+	private addCompactionCostNotice(notice: CompactionCostNotice): void {
+		if (!this.settingsManager.getShowCacheMissNotices()) return;
+
+		const { usage } = notice;
+		const tokens = usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+		const cost = usage.cost.total >= 0.01 ? ` (~$${usage.cost.total.toFixed(2)})` : "";
+		const label = notice.kind === "compaction" ? "Compaction" : "Branch summary";
+		this.chatContainer.addChild(new Spacer(1));
+		this.chatContainer.addChild(
+			new Text(theme.fg("warning", `${label}: ${formatTokens(tokens)} tokens billed${cost}`), 1, 0),
+		);
 	}
 
 	/**
@@ -4000,6 +4309,19 @@ export class InteractiveMode {
 	private async handleFollowUp(): Promise<void> {
 		const text = (this.editor.getExpandedText?.() ?? this.editor.getText()).trim();
 		if (!text) return;
+
+		// harness-pi: defer queued built-in commands until idle
+		const commandName = text.startsWith("/") ? text.slice(1).split(" ", 1)[0] : undefined;
+		if (
+			(this.session.isCompacting || this.session.isStreaming) &&
+			BUILTIN_SLASH_COMMANDS.some((command) => command.name === commandName)
+		) {
+			this.editor.addToHistory?.(text);
+			this.editor.setText("");
+			await this.session.waitForIdle();
+			await this.editor.onSubmit?.(text);
+			return;
+		}
 
 		// Queue input during compaction (extension commands execute immediately)
 		if (this.session.isCompacting) {
@@ -4429,9 +4751,15 @@ export class InteractiveMode {
 	private showSettingsSelector(): void {
 		this.showSelector((done) => {
 			let selector: SettingsSelectorComponent | undefined;
+			const defaultProvider = this.settingsManager.getDefaultProvider();
+			const defaultModelId = this.settingsManager.getDefaultModel();
+			const defaultModel = defaultProvider && defaultModelId ? `${defaultProvider}/${defaultModelId}` : "not set";
 			selector = new SettingsSelectorComponent(
 				{
 					autoCompact: this.session.autoCompactionEnabled,
+					defaultModel,
+					currentModel: this.session.model,
+					availableDefaultModels: this.session.modelRuntime.getAvailableSnapshot(),
 					showImages: this.settingsManager.getShowImages(),
 					imageWidthCells: this.settingsManager.getImageWidthCells(),
 					autoResizeImages: this.settingsManager.getImageAutoResize(),
@@ -4441,8 +4769,9 @@ export class InteractiveMode {
 					followUpMode: this.session.followUpMode,
 					transport: this.settingsManager.getTransport(),
 					httpIdleTimeoutMs: this.settingsManager.getHttpIdleTimeoutMs(),
-					thinkingLevel: this.session.thinkingLevel,
-					availableThinkingLevels: this.session.getAvailableThinkingLevels(),
+					thinkingLevel: this.settingsManager.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL,
+					availableThinkingLevels: [...THINKING_LEVEL_OPTIONS],
+					modelThinkingLevels: this.settingsManager.getAllModelThinkingLevels(),
 					currentTheme: this.themeController.getThemeSelection() || "dark",
 					terminalTheme: this.themeController.getTerminalTheme(),
 					availableThemes: getAvailableThemes(),
@@ -4512,10 +4841,26 @@ export class InteractiveMode {
 						configureHttpDispatcher(timeoutMs);
 						this.showStatus(`HTTP idle timeout: ${formatHttpIdleTimeoutMs(timeoutMs)}`);
 					},
-					onThinkingLevelChange: (level) => {
-						this.session.setThinkingLevel(level);
-						this.footer.invalidate();
-						this.updateEditorBorderColor();
+					onModelThinkingLevelChange: (provider, modelId, level) => {
+						this.settingsManager.setModelThinkingLevel(provider, modelId, level);
+						// If the override is for the current model, apply it to the session too
+						const current = this.session.model;
+						if (current && current.provider === provider && current.id === modelId) {
+							this.session.setThinkingLevel(level);
+							this.footer.invalidate();
+							this.updateEditorBorderColor();
+						}
+					},
+					onModelThinkingLevelRemove: (provider, modelId) => {
+						this.settingsManager.removeModelThinkingLevel(provider, modelId);
+						// If the override was for the current model, revert to global default
+						const current = this.session.model;
+						if (current && current.provider === provider && current.id === modelId) {
+							const globalDefault = this.settingsManager.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL;
+							this.session.setThinkingLevel(globalDefault);
+							this.footer.invalidate();
+							this.updateEditorBorderColor();
+						}
 					},
 					onThemeChange: (themeSetting) => {
 						this.settingsManager.setTheme(themeSetting);
@@ -4639,6 +4984,55 @@ export class InteractiveMode {
 		});
 	}
 
+	private handleThinkingCommand(searchTerm?: string): void {
+		const availableLevels = this.session.getAvailableThinkingLevels();
+		if (!searchTerm) {
+			this.showThinkingSelector();
+			return;
+		}
+
+		const normalized = searchTerm.trim().toLowerCase();
+		const level = availableLevels.find((candidate) => candidate.toLowerCase() === normalized);
+		if (!level) {
+			this.showError(`Unknown thinking level "${searchTerm}". Available levels: ${availableLevels.join(", ")}.`);
+			return;
+		}
+
+		this.selectThinkingLevel(level, false);
+	}
+
+	private selectThinkingLevel(level: ThinkingLevel, persist: boolean): void {
+		try {
+			this.session.setThinkingLevel(level, { persist });
+			this.footer.invalidate();
+			this.updateEditorBorderColor();
+			this.showStatus(persist ? `Default thinking level: ${level}` : `Thinking level: ${level}`);
+		} catch (error) {
+			this.showError(error instanceof Error ? error.message : String(error));
+		}
+	}
+
+	private showThinkingSelector(): void {
+		this.showSelector((done) => {
+			const selectLevel = (level: ThinkingLevel, persist: boolean) => {
+				this.selectThinkingLevel(level, persist);
+				done();
+			};
+			const selector = new ThinkingSelectorComponent(
+				this.session.thinkingLevel ?? DEFAULT_THINKING_LEVEL,
+				this.session.getAvailableThinkingLevels(),
+				(level) => selectLevel(level, false),
+				() => {
+					done();
+					this.ui.requestRender();
+				},
+				(level) => selectLevel(level, true),
+				this.settingsManager.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL,
+			);
+			return { component: selector, focus: selector };
+		});
+	}
+
 	private async handleModelCommand(searchTerm?: string): Promise<void> {
 		if (!searchTerm) {
 			this.showModelSelector();
@@ -4648,7 +5042,7 @@ export class InteractiveMode {
 		const model = await this.findExactModelMatch(searchTerm);
 		if (model) {
 			try {
-				await this.session.setModel(model);
+				await this.session.setModel(model, { persist: false });
 				this.footer.invalidate();
 				this.updateEditorBorderColor();
 				this.showStatus(`Model: ${model.id}`);
@@ -4790,31 +5184,35 @@ export class InteractiveMode {
 
 	private showModelSelector(initialSearchInput?: string): void {
 		this.showSelector((done) => {
+			const selectModel = async (model: Model<any>, persist: boolean) => {
+				try {
+					await this.session.setModel(model, { persist });
+					this.footer.invalidate();
+					this.updateEditorBorderColor();
+					done();
+					this.showStatus(persist ? `Default model: ${model.provider}/${model.id}` : `Model: ${model.id}`);
+					void this.maybeWarnAboutAnthropicSubscriptionAuth(model);
+					this.checkDaxnutsEasterEgg(model);
+				} catch (error) {
+					done();
+					this.showError(error instanceof Error ? error.message : String(error));
+				}
+			};
+			const defaultProvider = this.settingsManager.getDefaultProvider();
+			const defaultModel = this.settingsManager.getDefaultModel();
 			const selector = new ModelSelectorComponent(
 				this.ui,
 				this.session.model,
-				this.settingsManager,
 				this.session.modelRuntime,
 				this.session.scopedModels,
-				async (model) => {
-					try {
-						await this.session.setModel(model);
-						this.footer.invalidate();
-						this.updateEditorBorderColor();
-						done();
-						this.showStatus(`Model: ${model.id}`);
-						void this.maybeWarnAboutAnthropicSubscriptionAuth(model);
-						this.checkDaxnutsEasterEgg(model);
-					} catch (error) {
-						done();
-						this.showError(error instanceof Error ? error.message : String(error));
-					}
-				},
+				(model) => selectModel(model, false),
 				() => {
 					done();
 					this.ui.requestRender();
 				},
 				initialSearchInput,
+				(model) => selectModel(model, true),
+				defaultProvider && defaultModel ? { provider: defaultProvider, id: defaultModel } : undefined,
 			);
 			return { component: selector, focus: selector, dispose: () => selector.dispose() };
 		});
@@ -5480,7 +5878,10 @@ export class InteractiveMode {
 		if (isUnknownModel(previousModel)) {
 			const availableModels = this.session.modelRuntime.getAvailableSnapshot();
 			const providerModels = availableModels.filter((model) => model.provider === providerId);
-			if (!hasDefaultModelProvider(providerId)) {
+			// Matches LLAMA_PROVIDER_ID from extensions/llama/provider.ts; kept inline to avoid coupling interactive mode to the built-in extension.
+			if (providerId === "llama.cpp") {
+				selectionError = llamaCppPostLoginGuidance(actionLabel, providerModels.length);
+			} else if (!hasDefaultModelProvider(providerId)) {
 				selectionError = `${actionLabel}, but no default model is configured for provider "${providerId}". Use /model to select a model.`;
 			} else if (providerModels.length === 0) {
 				selectionError = `${actionLabel}, but no models are available for that provider. Use /model to select a model.`;
@@ -5491,7 +5892,7 @@ export class InteractiveMode {
 					selectionError = `${actionLabel}, but its default model "${defaultModelId}" is not available. Use /model to select a model.`;
 				} else {
 					try {
-						await this.session.setModel(selectedModel);
+						await this.session.setModel(selectedModel, { persist: true });
 					} catch (error: unknown) {
 						selectedModel = undefined;
 						const errorMessage = error instanceof Error ? error.message : String(error);
@@ -5915,97 +6316,14 @@ export class InteractiveMode {
 	}
 
 	private async handleShareCommand(): Promise<void> {
-		// Check if gh is available and logged in
-		try {
-			const authResult = spawnSync("gh", ["auth", "status"], { encoding: "utf-8" });
-			if (authResult.status !== 0) {
-				this.showError("GitHub CLI is not logged in. Run 'gh auth login' first.");
-				return;
-			}
-		} catch {
-			this.showError("GitHub CLI (gh) is not installed. Install it from https://cli.github.com/");
-			return;
-		}
-
-		// Export to a temp file
-		const tmpFile = path.join(os.tmpdir(), "session.html");
-		try {
-			await this.session.exportToHtml(tmpFile, { themeName: theme.name });
-		} catch (error: unknown) {
-			this.showError(`Failed to export session: ${error instanceof Error ? error.message : "Unknown error"}`);
-			return;
-		}
-
-		// Show cancellable loader, replacing the editor
-		const loader = new BorderedLoader(this.ui, theme, "Creating gist...");
-		this.editorContainer.clear();
-		this.editorContainer.addChild(loader);
-		this.ui.setFocus(loader);
-		this.ui.requestRender();
-
-		const restoreEditor = () => {
-			loader.dispose();
-			this.editorContainer.clear();
-			this.editorContainer.addChild(this.editor);
-			this.ui.setFocus(this.editor);
-			try {
-				fs.unlinkSync(tmpFile);
-			} catch {
-				// Ignore cleanup errors
-			}
-		};
-
-		// Create a secret gist asynchronously
-		let proc: ReturnType<typeof spawn> | null = null;
-
-		loader.onAbort = () => {
-			proc?.kill();
-			restoreEditor();
-			this.showStatus("Share cancelled");
-		};
-
-		try {
-			const result = await new Promise<{ stdout: string; stderr: string; code: number | null }>((resolve) => {
-				proc = spawn("gh", ["gist", "create", "--public=false", tmpFile]);
-				let stdout = "";
-				let stderr = "";
-				proc.stdout?.on("data", (data) => {
-					stdout += data.toString();
-				});
-				proc.stderr?.on("data", (data) => {
-					stderr += data.toString();
-				});
-				proc.on("close", (code) => resolve({ stdout, stderr, code }));
-			});
-
-			if (loader.signal.aborted) return;
-
-			restoreEditor();
-
-			if (result.code !== 0) {
-				const errorMsg = result.stderr?.trim() || "Unknown error";
-				this.showError(`Failed to create gist: ${errorMsg}`);
-				return;
-			}
-
-			// Extract gist ID from the URL returned by gh
-			// gh returns something like: https://gist.github.com/username/GIST_ID
-			const gistUrl = result.stdout?.trim();
-			const gistId = gistUrl?.split("/").pop();
-			if (!gistId) {
-				this.showError("Failed to parse gist ID from gh output");
-				return;
-			}
-
-			// Create the preview URL
-			const previewUrl = getShareViewerUrl(gistId);
-			this.showStatus(`Share URL: ${previewUrl}\nGist: ${gistUrl}`);
-		} catch (error: unknown) {
-			if (!loader.signal.aborted) {
-				restoreEditor();
-				this.showError(`Failed to create gist: ${error instanceof Error ? error.message : "Unknown error"}`);
-			}
-		}
+		await shareSession({
+			session: this.session,
+			ui: this.ui,
+			editorContainer: this.editorContainer,
+			editor: this.editor,
+			showStatus: (message) => this.showStatus(message),
+			showError: (message) => this.showError(message),
+		});
 	}
 
 	private async handleCopyCommand(options: { flashConfirmation?: boolean } = {}): Promise<void> {
