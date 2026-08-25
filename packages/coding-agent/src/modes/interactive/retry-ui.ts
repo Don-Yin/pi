@@ -1,9 +1,9 @@
-import type { Component, Container } from "@earendil-works/pi-tui";
+function isAssistant(item: unknown): item is { role: "assistant"; stopReason?: string } {
+	return typeof item === "object" && item !== null && "role" in item && item.role === "assistant";
+}
 
-export function removeTransientRetryError(
-	container: Pick<Container, "removeChild">,
-	component: Component | undefined,
-): undefined {
-	if (component) container.removeChild(component);
-	return undefined;
+export function hideSupersededRetryErrors<T>(items: readonly T[]): T[] {
+	return items.filter(
+		(item, index) => !(isAssistant(item) && item.stopReason === "error" && isAssistant(items[index + 1])),
+	);
 }
