@@ -359,6 +359,7 @@ export class AgentSession {
 	private _baseToolsOverride?: Record<string, AgentTool>;
 	private _sessionStartEvent: SessionStartEvent;
 	private _extensionUIContext?: ExtensionUIContext;
+	private _extensionUIContextDescriptors?: PropertyDescriptorMap;
 	private _extensionMode: ExtensionMode = "print";
 	private _extensionCommandContextActions?: ExtensionCommandContextActions;
 	private _extensionAbortHandler?: () => void;
@@ -2362,6 +2363,7 @@ export class AgentSession {
 	async bindExtensions(bindings: ExtensionBindings): Promise<void> {
 		if (bindings.uiContext !== undefined) {
 			this._extensionUIContext = bindings.uiContext;
+			this._extensionUIContextDescriptors = Object.getOwnPropertyDescriptors(bindings.uiContext);
 		}
 		if (bindings.mode !== undefined) {
 			this._extensionMode = bindings.mode;
@@ -2736,6 +2738,9 @@ export class AgentSession {
 		const oldRunner = this._extensionRunner;
 		const previousFlagValues = oldRunner.getFlagValues();
 		await emitSessionShutdownEvent(oldRunner, { type: "session_shutdown", reason: "reload" });
+		if (this._extensionUIContext && this._extensionUIContextDescriptors) {
+			Object.defineProperties(this._extensionUIContext, this._extensionUIContextDescriptors);
+		}
 		oldRunner.invalidate();
 		await this.settingsManager.reload();
 		this.syncQueueModesFromSettings();
