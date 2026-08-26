@@ -119,6 +119,7 @@ describe("regression #6363: agent settled event and idle waiting", () => {
 			commandContextActions: {
 				waitForIdle: () => harness.session.waitForIdle(),
 				newSession: async () => ({ cancelled: false }),
+				cloneSession: async () => ({ cancelled: false }),
 				fork: async () => ({ cancelled: false }),
 				navigateTree: async () => ({ cancelled: false }),
 				switchSession: async () => ({ cancelled: false }),

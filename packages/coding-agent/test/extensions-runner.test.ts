@@ -964,14 +964,16 @@ describe("ExtensionRunner", () => {
 	});
 
 	describe("command context", () => {
-		it("passes fork options through to the bound handler", async () => {
+		it("passes clone and fork options through to the bound handlers", async () => {
 			const runtime = createExtensionRuntime();
 			const runner = new ExtensionRunner([], runtime, tempDir, sessionManager, modelRegistry);
+			const cloneSession = vi.fn(async () => ({ cancelled: false, sessionFile: "/tmp/clone.jsonl" }));
 			const fork = vi.fn(async () => ({ cancelled: false }));
 
 			runner.bindCommandContext({
 				waitForIdle: async () => {},
 				newSession: async () => ({ cancelled: false }),
+				cloneSession,
 				fork,
 				navigateTree: async () => ({ cancelled: false }),
 				switchSession: async () => ({ cancelled: false }),
@@ -979,6 +981,9 @@ describe("ExtensionRunner", () => {
 			});
 
 			const commandContext = runner.createCommandContext();
+			await commandContext.cloneSession("entry-0", { name: "copy" });
+			expect(cloneSession).toHaveBeenCalledWith("entry-0", { name: "copy" });
+
 			await commandContext.fork("entry-1");
 			expect(fork).toHaveBeenCalledWith("entry-1", undefined);
 

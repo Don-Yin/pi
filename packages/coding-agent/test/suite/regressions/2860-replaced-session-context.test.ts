@@ -107,6 +107,7 @@ describe("regression #2860: replaced session callbacks", () => {
 				commandContextActions: {
 					waitForIdle: () => session.agent.waitForIdle(),
 					newSession: async (options) => runtime.newSession(options),
+					cloneSession: (entryId, options) => runtime.cloneSession(entryId, options),
 					fork: async (entryId, options) => {
 						const result = await runtime.fork(entryId, options);
 						return { cancelled: result.cancelled };

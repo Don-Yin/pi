@@ -370,6 +370,12 @@ export interface ExtensionCommandContext extends ExtensionContext {
 		withSession?: (ctx: ReplacedSessionContext) => Promise<void>;
 	}): Promise<{ cancelled: boolean }>;
 
+	/** Clone a branch into a new session file without replacing the active session. */
+	cloneSession(
+		entryId: string,
+		options?: { name?: string },
+	): Promise<{ cancelled: boolean; sessionFile?: string; sessionId?: string }>;
+
 	/** Fork from a specific entry, creating a new session file. */
 	fork(
 		entryId: string,
@@ -1718,6 +1724,10 @@ export interface ExtensionCommandContextActions {
 		setup?: (sessionManager: SessionManager) => Promise<void>;
 		withSession?: (ctx: ReplacedSessionContext) => Promise<void>;
 	}) => Promise<{ cancelled: boolean }>;
+	cloneSession: (
+		entryId: string,
+		options?: { name?: string },
+	) => Promise<{ cancelled: boolean; sessionFile?: string; sessionId?: string }>;
 	fork: (
 		entryId: string,
 		options?: { position?: "before" | "at"; withSession?: (ctx: ReplacedSessionContext) => Promise<void> },

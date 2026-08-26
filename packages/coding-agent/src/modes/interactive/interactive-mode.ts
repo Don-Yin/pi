@@ -2125,6 +2125,7 @@ export class InteractiveMode {
 						return this.handleFatalRuntimeError("Failed to create session", error);
 					}
 				},
+				cloneSession: (entryId, options) => this.runtimeHost.cloneSession(entryId, options),
 				fork: async (entryId, options) => {
 					try {
 						const result = await this.runtimeHost.fork(entryId, options);

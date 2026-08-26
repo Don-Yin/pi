@@ -259,6 +259,33 @@ export class AgentSessionRuntime {
 		return { cancelled: false };
 	}
 
+	async cloneSession(
+		entryId: string,
+		options?: { name?: string },
+	): Promise<{ cancelled: boolean; sessionFile?: string; sessionId?: string }> {
+		const beforeResult = await this.emitBeforeFork(entryId, { position: "at" });
+		if (beforeResult.cancelled) return { cancelled: true };
+
+		const currentSessionFile = this.session.sessionFile;
+		if (!currentSessionFile || !this.session.sessionManager.isPersisted()) {
+			throw new Error("Detached session cloning requires a persisted session");
+		}
+		if (!existsSync(currentSessionFile)) {
+			throw new Error(
+				"This session has not been saved yet. Wait for the first assistant response before cloning it.",
+			);
+		}
+		if (!this.session.sessionManager.getEntry(entryId)) {
+			throw new Error("Invalid entry ID for cloning");
+		}
+
+		const sessionManager = SessionManager.open(currentSessionFile, this.session.sessionManager.getSessionDir());
+		const sessionFile = sessionManager.createBranchedSession(entryId);
+		if (!sessionFile) throw new Error("Failed to create cloned session");
+		if (options?.name !== undefined) sessionManager.appendSessionInfo(options.name);
+		return { cancelled: false, sessionFile, sessionId: sessionManager.getSessionId() };
+	}
+
 	async fork(
 		entryId: string,
 		options?: { position?: "before" | "at"; withSession?: (ctx: ReplacedSessionContext) => Promise<void> },

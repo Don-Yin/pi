@@ -166,6 +166,11 @@ export type NewSessionHandler = (options?: {
 	withSession?: (ctx: ReplacedSessionContext) => Promise<void>;
 }) => Promise<{ cancelled: boolean }>;
 
+export type CloneSessionHandler = (
+	entryId: string,
+	options?: { name?: string },
+) => Promise<{ cancelled: boolean; sessionFile?: string; sessionId?: string }>;
+
 export type ForkHandler = (
 	entryId: string,
 	options?: { position?: "before" | "at"; withSession?: (ctx: ReplacedSessionContext) => Promise<void> },
@@ -293,6 +298,7 @@ export class ExtensionRunner {
 	private getSystemPromptFn: () => string = () => "";
 	private getSystemPromptOptionsFn: () => BuildSystemPromptOptions = () => ({ cwd: this.cwd });
 	private newSessionHandler: NewSessionHandler = async () => ({ cancelled: false });
+	private cloneSessionHandler: CloneSessionHandler = async () => ({ cancelled: false });
 	private forkHandler: ForkHandler = async () => ({ cancelled: false });
 	private navigateTreeHandler: NavigateTreeHandler = async () => ({ cancelled: false });
 	private switchSessionHandler: SwitchSessionHandler = async () => ({ cancelled: false });
@@ -423,6 +429,7 @@ export class ExtensionRunner {
 		if (actions) {
 			this.waitForIdleFn = actions.waitForIdle;
 			this.newSessionHandler = actions.newSession;
+			this.cloneSessionHandler = actions.cloneSession;
 			this.forkHandler = actions.fork;
 			this.navigateTreeHandler = actions.navigateTree;
 			this.switchSessionHandler = actions.switchSession;
@@ -432,6 +439,7 @@ export class ExtensionRunner {
 
 		this.waitForIdleFn = async () => {};
 		this.newSessionHandler = async () => ({ cancelled: false });
+		this.cloneSessionHandler = async () => ({ cancelled: false });
 		this.forkHandler = async () => ({ cancelled: false });
 		this.navigateTreeHandler = async () => ({ cancelled: false });
 		this.switchSessionHandler = async () => ({ cancelled: false });
@@ -789,6 +797,10 @@ export class ExtensionRunner {
 		context.newSession = (options) => {
 			this.assertActive();
 			return this.newSessionHandler(options);
+		};
+		context.cloneSession = (entryId, options) => {
+			this.assertActive();
+			return this.cloneSessionHandler(entryId, options);
 		};
 		context.fork = (entryId, options) => {
 			this.assertActive();
