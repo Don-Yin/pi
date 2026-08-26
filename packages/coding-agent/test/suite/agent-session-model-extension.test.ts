@@ -2,7 +2,7 @@ import type { AgentTool, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { fauxAssistantMessage, fauxToolCall, type Model, type Usage } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
-import type { BuildSystemPromptOptions, ExtensionAPI } from "../../src/index.ts";
+import type { BuildSystemPromptOptions, ExtensionAPI, ExtensionUIContext } from "../../src/index.ts";
 import { createHarness, getAssistantTexts, type Harness } from "./harness.ts";
 
 describe("AgentSession model and extension characterization", () => {
@@ -514,5 +514,34 @@ describe("AgentSession model and extension characterization", () => {
 		await harness.session.reload();
 
 		expect(lifecycleEvents).toEqual(["start:startup", "shutdown:reload", "start:reload"]);
+	});
+
+	it("reload restores pristine UI methods before new extensions wrap them", async () => {
+		const wrappingExtension = (pi: ExtensionAPI) => {
+			let restore: (() => void) | undefined;
+			pi.on("session_start", (_event, ctx) => {
+				const originalConfirm = ctx.ui.confirm;
+				const abort = new AbortController();
+				const wrappedConfirm: typeof originalConfirm = (...args) =>
+					abort.signal.aborted ? Promise.resolve(false) : originalConfirm.apply(ctx.ui, args);
+				ctx.ui.confirm = wrappedConfirm;
+				restore = () => {
+					abort.abort();
+					if (ctx.ui.confirm === wrappedConfirm) ctx.ui.confirm = originalConfirm;
+				};
+			});
+			pi.on("session_shutdown", () => restore?.());
+		};
+		const harness = await createHarness({
+			extensionFactories: [wrappingExtension, wrappingExtension],
+		});
+		harnesses.push(harness);
+		const confirm = async () => true;
+		const uiContext = { confirm } as unknown as ExtensionUIContext;
+
+		await harness.session.bindExtensions({ uiContext, mode: "tui" });
+		await harness.session.reload();
+
+		expect(await harness.session.extensionRunner.createContext().ui.confirm("Apply?", "Proceed?")).toBe(true);
 	});
 });
