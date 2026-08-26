@@ -322,6 +322,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			commandContextActions: {
 				waitForIdle: () => session.waitForIdle(),
 				newSession: async (options) => runtimeHost.newSession(options),
+				cloneSession: (entryId, cloneOptions) => runtimeHost.cloneSession(entryId, cloneOptions),
 				fork: async (entryId, forkOptions) => {
 					const result = await runtimeHost.fork(entryId, forkOptions);
 					return { cancelled: result.cancelled };

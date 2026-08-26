@@ -354,6 +354,28 @@ describe("AgentSessionRuntime characterization", () => {
 		);
 	});
 
+	it("clones the current branch without replacing the active runtime", async () => {
+		const { runtime } = await createRuntimeForTest(() => {});
+		await runtime.session.prompt("hello");
+		const originalSession = runtime.session;
+		const originalSessionFile = runtime.session.sessionFile;
+		const leafId = runtime.session.sessionManager.getLeafId();
+		expect(leafId).toBeTruthy();
+
+		const result = await runtime.cloneSession(leafId!, { name: "copy" });
+		expect(result.cancelled).toBe(false);
+		expect(result.sessionFile).toBeDefined();
+		expect(result.sessionFile).not.toBe(originalSessionFile);
+		expect(runtime.session).toBe(originalSession);
+		expect(runtime.session.sessionFile).toBe(originalSessionFile);
+		const clone = SessionManager.open(result.sessionFile!);
+		expect(clone.getSessionId()).toBe(result.sessionId);
+		expect(clone.getSessionName()).toBe("copy");
+		expect(clone.getBranch().filter((entry) => entry.type !== "session_info")).toEqual(
+			runtime.session.sessionManager.getBranch(),
+		);
+	});
+
 	it("duplicates the current active branch when forking at the current position", async () => {
 		const { runtime } = await createRuntimeForTest(() => {});
 		await runtime.session.prompt("hello");

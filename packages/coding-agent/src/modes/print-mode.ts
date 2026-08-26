@@ -78,6 +78,7 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 			commandContextActions: {
 				waitForIdle: () => session.waitForIdle(),
 				newSession: async (newSessionOptions) => runtimeHost.newSession(newSessionOptions),
+				cloneSession: (entryId, cloneOptions) => runtimeHost.cloneSession(entryId, cloneOptions),
 				fork: async (entryId, forkOptions) => {
 					const result = await runtimeHost.fork(entryId, forkOptions);
 					return { cancelled: result.cancelled };
