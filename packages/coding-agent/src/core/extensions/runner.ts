@@ -282,6 +282,12 @@ export class ExtensionRunner {
 	private waitForIdleFn: () => Promise<void> = async () => {};
 	private abortFn: () => void = () => {};
 	private hasPendingMessagesFn: () => boolean = () => false;
+	private getQueuedMessagesFn: () => {
+		steering: readonly string[];
+		followUp: readonly string[];
+	} = () => ({ steering: [], followUp: [] });
+	private updateQueuedMessageFn: (kind: "steering" | "followUp", index: number, text?: string) => boolean = () =>
+		false;
 	private getContextUsageFn: () => ContextUsage | undefined = () => undefined;
 	private compactFn: (options?: CompactOptions) => void = () => {};
 	private getSystemPromptFn: () => string = () => "";
@@ -344,6 +350,8 @@ export class ExtensionRunner {
 		this.getSignalFn = contextActions.getSignal;
 		this.abortFn = contextActions.abort;
 		this.hasPendingMessagesFn = contextActions.hasPendingMessages;
+		this.getQueuedMessagesFn = contextActions.getQueuedMessages;
+		this.updateQueuedMessageFn = contextActions.updateQueuedMessage;
 		this.shutdownHandler = contextActions.shutdown;
 		this.getContextUsageFn = contextActions.getContextUsage;
 		this.compactFn = contextActions.compact;
@@ -730,6 +738,18 @@ export class ExtensionRunner {
 			hasPendingMessages: () => {
 				runner.assertActive();
 				return runner.hasPendingMessagesFn();
+			},
+			getQueuedMessages: () => {
+				runner.assertActive();
+				const queued = runner.getQueuedMessagesFn();
+				return {
+					steering: [...queued.steering],
+					followUp: [...queued.followUp],
+				};
+			},
+			updateQueuedMessage: (kind, index, text) => {
+				runner.assertActive();
+				return runner.updateQueuedMessageFn(kind, index, text);
 			},
 			shutdown: () => {
 				runner.assertActive();

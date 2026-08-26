@@ -498,6 +498,26 @@ describe("Agent", () => {
 		expect(agent.state.messages).not.toContainEqual(message);
 	});
 
+	it("updates and removes queued user messages by queue-local index", () => {
+		const agent = new Agent({ streamFn: unusedStreamFunction });
+		const first = { role: "user" as const, content: "first", timestamp: 1 };
+		const custom = {
+			role: "custom" as const,
+			customType: "note",
+			content: "keep",
+			display: true,
+			timestamp: 2,
+		};
+		const second = { role: "user" as const, content: "second", timestamp: 2 };
+		agent.followUp(first);
+		agent.followUp(custom);
+		agent.followUp(second);
+
+		expect(agent.updateQueuedUserMessage("followUp", 1, (message) => ({ ...message, content: "edited" }))).toBe(true);
+		expect(agent.updateQueuedUserMessage("followUp", 0, () => undefined)).toBe(true);
+		expect(agent.updateQueuedUserMessage("followUp", 4, () => undefined)).toBe(false);
+	});
+
 	it("should handle abort controller", () => {
 		const agent = new Agent({ streamFn: unusedStreamFunction });
 

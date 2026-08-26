@@ -6,6 +6,7 @@ import type {
 	TextContent,
 	ThinkingBudgets,
 	Transport,
+	UserMessage,
 } from "@earendil-works/pi-ai";
 import { runAgentLoop, runAgentLoopContinue } from "./agent-loop.ts";
 import { getDefaultStreamFn } from "./stream-fn.ts";
@@ -156,6 +157,20 @@ class PendingMessageQueue {
 	clear(): void {
 		this.messages = [];
 	}
+
+	updateUserMessage(index: number, update: (message: UserMessage) => UserMessage | undefined): boolean {
+		let userIndex = 0;
+		for (let position = 0; position < this.messages.length; position++) {
+			const message = this.messages[position];
+			if (message?.role !== "user") continue;
+			if (userIndex++ !== index) continue;
+			const next = update(message);
+			if (next) this.messages[position] = next;
+			else this.messages.splice(position, 1);
+			return true;
+		}
+		return false;
+	}
 }
 
 type ActiveRun = {
@@ -303,6 +318,15 @@ export class Agent {
 	clearAllQueues(): void {
 		this.clearSteeringQueue();
 		this.clearFollowUpQueue();
+	}
+
+	/** Update or remove one queued user message by queue-local index. */
+	updateQueuedUserMessage(
+		kind: "steering" | "followUp",
+		index: number,
+		update: (message: UserMessage) => UserMessage | undefined,
+	): boolean {
+		return (kind === "steering" ? this.steeringQueue : this.followUpQueue).updateUserMessage(index, update);
 	}
 
 	/** Returns true when either queue still contains pending messages. */
