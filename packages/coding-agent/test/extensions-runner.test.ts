@@ -95,12 +95,34 @@ describe("ExtensionRunner", () => {
 		getSignal: () => undefined,
 		abort: () => {},
 		hasPendingMessages: () => false,
+		getQueuedMessages: () => ({ steering: [], followUp: [] }),
+		updateQueuedMessage: () => false,
 		shutdown: () => {},
 		getContextUsage: () => undefined,
 		compact: () => {},
 		getSystemPrompt: () => "",
 		getScopedModels: () => [],
 	};
+
+	describe("queued messages", () => {
+		it("forwards queue updates through the extension context", async () => {
+			const result = await discoverAndLoadExtensions([], tempDir, tempDir);
+			const runner = new ExtensionRunner(result.extensions, result.runtime, tempDir, sessionManager, modelRegistry);
+			const updates: unknown[][] = [];
+			runner.bindCore(extensionActions, {
+				...extensionContextActions,
+				getQueuedMessages: () => ({ steering: ["steer"], followUp: ["follow"] }),
+				updateQueuedMessage: (...args) => {
+					updates.push(args);
+					return true;
+				},
+			});
+			const context = runner.createContext();
+			expect(context.getQueuedMessages()).toEqual({ steering: ["steer"], followUp: ["follow"] });
+			expect(context.updateQueuedMessage("followUp", 2, "edited")).toBe(true);
+			expect(updates).toEqual([["followUp", 2, "edited"]]);
+		});
+	});
 
 	describe("scopedModels", () => {
 		it("reflects the getScopedModels context action on ctx.scopedModels", async () => {

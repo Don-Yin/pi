@@ -89,7 +89,6 @@ import {
 	resolveModelScopeFromModels,
 } from "../../core/model-resolver.ts";
 import { CredentialSynchronizationError } from "../../core/model-runtime.ts";
-import { hideSupersededRetryErrors } from "./retry-ui.ts";
 import { DefaultPackageManager } from "../../core/package-manager.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
@@ -157,6 +156,7 @@ import { UserMessageSelectorComponent } from "./components/user-message-selector
 import { editInExternalEditor } from "./external-editor.ts";
 import { refreshModelCatalogs } from "./model-catalog-refresh.ts";
 import { getModelSearchText } from "./model-search.ts";
+import { hideSupersededRetryErrors } from "./retry-ui.ts";
 import { shareSession } from "./session-share.ts";
 import {
 	getAvailableThemes,
@@ -2294,6 +2294,11 @@ export class InteractiveMode {
 				this.restoreQueuedMessagesToEditor({ abort: true });
 			},
 			hasPendingMessages: () => this.session.pendingMessageCount > 0,
+			getQueuedMessages: () => ({
+				steering: this.session.getSteeringMessages(),
+				followUp: this.session.getFollowUpMessages(),
+			}),
+			updateQueuedMessage: (kind, index, text) => this.session.updateQueuedMessage(kind, index, text),
 			shutdown: () => {
 				this.shutdownRequested = true;
 			},
@@ -3991,16 +3996,22 @@ export class InteractiveMode {
 		entries: SessionEntry[],
 		options: { updateFooter?: boolean; populateHistory?: boolean } = {},
 	): void {
-		const items = hideSupersededRetryErrors(entries.flatMap((entry): RenderSessionItem[] => {
-			if (entry.type === "custom") {
-				return [entry];
-			}
-			const messages = sessionEntryToContextMessages(entry);
-			if ((entry.type === "compaction" || entry.type === "branch_summary") && entry.usage && messages.length > 0) {
-				return [...messages, { type: "compaction_cost", kind: entry.type, usage: entry.usage }];
-			}
-			return messages;
-		}));
+		const items = hideSupersededRetryErrors(
+			entries.flatMap((entry): RenderSessionItem[] => {
+				if (entry.type === "custom") {
+					return [entry];
+				}
+				const messages = sessionEntryToContextMessages(entry);
+				if (
+					(entry.type === "compaction" || entry.type === "branch_summary") &&
+					entry.usage &&
+					messages.length > 0
+				) {
+					return [...messages, { type: "compaction_cost", kind: entry.type, usage: entry.usage }];
+				}
+				return messages;
+			}),
+		);
 		this.renderSessionItems(items, options);
 	}
 

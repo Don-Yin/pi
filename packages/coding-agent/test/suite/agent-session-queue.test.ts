@@ -176,6 +176,29 @@ describe("AgentSession queue characterization", () => {
 		expect(getAssistantTexts(harness)).toEqual(["", "handled steer 1", "handled steer 2"]);
 	});
 
+	it("edits and cancels queued follow-up messages before delivery", async () => {
+		const waiting = await createWaitingHarness();
+		const { harness, waitForToolStart, promptPromise, releaseToolExecution } = waiting;
+		harnesses.push(harness);
+
+		harness.setResponses([
+			fauxAssistantMessage(fauxToolCall("wait", {}), { stopReason: "toolUse" }),
+			fauxAssistantMessage("original turn complete"),
+			fauxAssistantMessage("handled edited follow-up"),
+		]);
+
+		await waitForToolStart;
+		await harness.session.followUp("cancel me");
+		await harness.session.followUp("edit me");
+		expect(harness.session.updateQueuedMessage("followUp", 0)).toBe(true);
+		expect(harness.session.updateQueuedMessage("followUp", 0, "edited follow-up")).toBe(true);
+		expect(harness.session.updateQueuedMessage("followUp", 4)).toBe(false);
+		releaseToolExecution();
+		await promptPromise;
+
+		expect(getUserTexts(harness)).toEqual(["start", "edited follow-up"]);
+	});
+
 	it("delivers multiple follow-up messages in order in one-at-a-time mode", async () => {
 		const waiting = await createWaitingHarness();
 		const { harness, waitForToolStart, promptPromise, releaseToolExecution } = waiting;

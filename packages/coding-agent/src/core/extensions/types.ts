@@ -338,6 +338,10 @@ export interface ExtensionContext {
 	abort(): void;
 	/** Whether there are queued messages waiting */
 	hasPendingMessages(): boolean;
+	/** Read queued user messages in Pi delivery order. */
+	getQueuedMessages(): { steering: readonly string[]; followUp: readonly string[] };
+	/** Update or remove one queued user message by queue-local index. */
+	updateQueuedMessage(kind: "steering" | "followUp", index: number, text?: string): boolean;
 	/** Gracefully shutdown pi and exit. Available in all contexts. */
 	shutdown(): void;
 	/** Get current context usage for the active model. */
@@ -1694,6 +1698,8 @@ export interface ExtensionContextActions {
 	getSignal: () => AbortSignal | undefined;
 	abort: () => void;
 	hasPendingMessages: () => boolean;
+	getQueuedMessages: () => { steering: readonly string[]; followUp: readonly string[] };
+	updateQueuedMessage: (kind: "steering" | "followUp", index: number, text?: string) => boolean;
 	shutdown: () => void;
 	getContextUsage: () => ContextUsage | undefined;
 	compact: (options?: CompactOptions) => void;

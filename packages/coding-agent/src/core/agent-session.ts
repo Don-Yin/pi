@@ -1522,6 +1522,33 @@ export class AgentSession {
 		});
 	}
 
+	/** Update or remove one queued user message by queue-local index. */
+	updateQueuedMessage(kind: "steering" | "followUp", index: number, text?: string): boolean {
+		if (!Number.isSafeInteger(index) || index < 0) return false;
+		const messages = kind === "steering" ? this._steeringMessages : this._followUpMessages;
+		if (index >= messages.length) return false;
+		const updated = this.agent.updateQueuedUserMessage(kind, index, (message) => {
+			if (text === undefined) return undefined;
+			if (typeof message.content === "string") return { ...message, content: text };
+			let replaced = false;
+			const content: Array<TextContent | ImageContent> = [];
+			for (const part of message.content) {
+				if (part.type !== "text") content.push(part);
+				else if (!replaced) {
+					content.push({ ...part, text });
+					replaced = true;
+				}
+			}
+			if (!replaced) content.unshift({ type: "text", text });
+			return { ...message, content };
+		});
+		if (!updated) return false;
+		if (text === undefined) messages.splice(index, 1);
+		else messages[index] = text;
+		this._emitQueueUpdate();
+		return true;
+	}
+
 	/**
 	 * Clear all queued messages and return them.
 	 * Useful for restoring to editor when user aborts.
@@ -2552,6 +2579,11 @@ export class AgentSession {
 					void this.abort();
 				},
 				hasPendingMessages: () => this.pendingMessageCount > 0,
+				getQueuedMessages: () => ({
+					steering: this.getSteeringMessages(),
+					followUp: this.getFollowUpMessages(),
+				}),
+				updateQueuedMessage: (kind, index, text) => this.updateQueuedMessage(kind, index, text),
 				shutdown: () => {
 					this._extensionShutdownHandler?.();
 				},

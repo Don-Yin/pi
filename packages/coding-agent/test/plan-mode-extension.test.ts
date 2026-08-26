@@ -77,6 +77,8 @@ function setup(options: { activeTools?: string[]; selectChoice?: string; editorT
 		sessionManager: { getEntries: () => [] },
 		isIdle: () => false,
 		hasPendingMessages: () => false,
+		getQueuedMessages: () => ({ steering: [], followUp: [] }),
+		updateQueuedMessage: () => false,
 	} as unknown as ExtensionContext;
 
 	async function runCommand(name: string): Promise<void> {
