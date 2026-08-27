@@ -5623,7 +5623,7 @@ export class InteractiveMode {
 						done();
 						const result = await this.handleResumeSession(sessionPath);
 						if (!result.cancelled && this.options.startupSessionName) {
-							this.sessionManager.appendSessionInfo(this.options.startupSessionName);
+							this.session.setSessionName(this.options.startupSessionName);
 						}
 						resolve(!result.cancelled);
 					},
