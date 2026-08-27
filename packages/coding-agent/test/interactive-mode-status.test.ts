@@ -706,6 +706,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 		let onCancel: (() => void) | undefined;
 		let selectedPath: string | undefined;
 		let sessionName: string | undefined;
+		let selectorOptions: { initialScope?: "current" | "all" } | undefined;
 		let doneCount = 0;
 		const fakeThis = {
 			options: { startupSessionName: "Resumed Name" },
@@ -718,9 +719,14 @@ describe("InteractiveMode.showLoadedResources", () => {
 				selectedPath = path;
 				return { cancelled: false };
 			},
-			createSessionSelector: (select: (sessionPath: string) => Promise<void>, cancel: () => void) => {
+			createSessionSelector: (
+				select: (sessionPath: string) => Promise<void>,
+				cancel: () => void,
+				options?: { initialScope?: "current" | "all" },
+			) => {
 				onSelect = select;
 				onCancel = cancel;
+				selectorOptions = options;
 				return {};
 			},
 			showSelector: (create: (done: () => void) => unknown) => create(() => doneCount++),
@@ -731,6 +737,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 		await expect(selected).resolves.toBe(true);
 		expect(selectedPath).toBe("/tmp/session.jsonl");
 		expect(sessionName).toBe("Resumed Name");
+		expect(selectorOptions).toEqual({ initialScope: "all" });
 		expect(doneCount).toBe(1);
 
 		const cancelled = (InteractiveMode as any).prototype.showStartupSessionSelector.call(fakeThis);

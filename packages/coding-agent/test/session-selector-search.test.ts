@@ -13,7 +13,7 @@ function makeSession(
 		created: overrides.created ?? new Date(0),
 		modified: overrides.modified,
 		messageCount: overrides.messageCount ?? 1,
-		firstMessage: overrides.firstMessage ?? "(no messages)",
+		firstMessage: overrides.firstMessage ?? overrides.allMessagesText,
 		allMessagesText: overrides.allMessagesText,
 	};
 }
@@ -125,6 +125,33 @@ describe("session selector search", () => {
 		expect(result).toEqual([]);
 	});
 
+	it("matches only the visible session label", () => {
+		const sessions = [
+			makeSession({
+				id: "hidden-match",
+				name: "slay-spire-mod",
+				firstMessage: "original request",
+				modified: new Date("2026-01-02T00:00:00.000Z"),
+				allMessagesText: "later discussion mentions pi-mobile",
+			}),
+			makeSession({
+				id: "visible-match",
+				name: "pi-mobile",
+				modified: new Date("2026-01-01T00:00:00.000Z"),
+				allMessagesText: "unrelated body",
+			}),
+			makeSession({
+				id: "unnamed-visible-match",
+				firstMessage: "fix pi-mobile history",
+				modified: new Date("2026-01-03T00:00:00.000Z"),
+				allMessagesText: "fix pi-mobile history and later content",
+			}),
+		];
+
+		const result = filterAndSortSessions(sessions, "pi-mobile", "recent");
+		expect(result.map((session) => session.id)).toEqual(["visible-match", "unnamed-visible-match"]);
+	});
+
 	describe("name filter", () => {
 		const sessions: SessionInfo[] = [
 			makeSession({
@@ -162,7 +189,7 @@ describe("session selector search", () => {
 		});
 
 		it("applies name filter before search query", () => {
-			const result = filterAndSortSessions(sessions, "blueberry", "recent", "named");
+			const result = filterAndSortSessions(sessions, "r", "recent", "named");
 			expect(result.map((session) => session.id)).toEqual(["named1", "named2"]);
 		});
 

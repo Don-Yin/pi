@@ -147,7 +147,7 @@ describe("session selector path/delete interactions", () => {
 		const confirmationChanges: Array<string | null> = [];
 		list.onDeleteConfirmationChange = (path) => confirmationChanges.push(path);
 
-		list.handleInput("a");
+		list.handleInput("h");
 		list.handleInput(CTRL_D);
 
 		expect(confirmationChanges).toEqual([sessions[0]!.path]);

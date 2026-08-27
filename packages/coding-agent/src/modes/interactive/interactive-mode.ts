@@ -5537,6 +5537,7 @@ export class InteractiveMode {
 						done();
 						resolve(false);
 					},
+					{ initialScope: "all" },
 				);
 				return { component: selector, focus: selector };
 			});
@@ -5546,6 +5547,7 @@ export class InteractiveMode {
 	private createSessionSelector(
 		onSelect: (sessionPath: string) => Promise<void>,
 		onCancel: () => void,
+		options?: { initialScope?: "current" | "all" },
 	): SessionSelectorComponent {
 		return new SessionSelectorComponent(
 			(onProgress) =>
@@ -5569,6 +5571,7 @@ export class InteractiveMode {
 				},
 				showRenameHint: true,
 				keybindings: this.keybindings,
+				initialScope: options?.initialScope,
 			},
 			this.sessionManager.getSessionFile(),
 		);
