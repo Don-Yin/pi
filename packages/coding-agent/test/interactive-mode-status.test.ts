@@ -697,6 +697,44 @@ describe("InteractiveMode.showLoadedResources", () => {
 		];
 	}
 
+	test("startup resume switches through the configured runtime", async () => {
+		let onSelect: ((sessionPath: string) => Promise<void>) | undefined;
+		let onCancel: (() => void) | undefined;
+		let selectedPath: string | undefined;
+		let sessionName: string | undefined;
+		let doneCount = 0;
+		const fakeThis = {
+			options: { startupSessionName: "Resumed Name" },
+			session: {
+				setSessionName: (name: string) => {
+					sessionName = name;
+				},
+			},
+			handleResumeSession: async (path: string) => {
+				selectedPath = path;
+				return { cancelled: false };
+			},
+			createSessionSelector: (select: (sessionPath: string) => Promise<void>, cancel: () => void) => {
+				onSelect = select;
+				onCancel = cancel;
+				return {};
+			},
+			showSelector: (create: (done: () => void) => unknown) => create(() => doneCount++),
+		};
+
+		const selected = (InteractiveMode as any).prototype.showStartupSessionSelector.call(fakeThis);
+		await onSelect?.("/tmp/session.jsonl");
+		await expect(selected).resolves.toBe(true);
+		expect(selectedPath).toBe("/tmp/session.jsonl");
+		expect(sessionName).toBe("Resumed Name");
+		expect(doneCount).toBe(1);
+
+		const cancelled = (InteractiveMode as any).prototype.showStartupSessionSelector.call(fakeThis);
+		onCancel?.();
+		await expect(cancelled).resolves.toBe(false);
+		expect(doneCount).toBe(2);
+	});
+
 	test("shows only the skill count", () => {
 		const fakeThis = createShowLoadedResourcesThis({
 			quietStartup: false,

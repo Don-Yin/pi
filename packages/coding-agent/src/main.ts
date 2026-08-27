@@ -30,7 +30,6 @@ import { processFileArguments } from "./cli/file-processor.ts";
 import { buildInitialMessage } from "./cli/initial-message.ts";
 import { listModels } from "./cli/list-models.ts";
 import { createProjectTrustContext } from "./cli/project-trust.ts";
-import { selectSession } from "./cli/session-picker.ts";
 import { shouldRunFirstTimeSetup, showFirstTimeSetup, showStartupSelector } from "./cli/startup-ui.ts";
 import { APP_NAME, ENV_SESSION_DIR, expandTildePath, getAgentDir, getPackageDir, VERSION } from "./config.ts";
 import { type CreateAgentSessionRuntimeFactory, createAgentSessionRuntime } from "./core/agent-session-runtime.ts";
@@ -352,7 +351,6 @@ export async function createSessionManager(
 	parsed: Args,
 	cwd: string,
 	sessionDir: string | undefined,
-	settingsManager: SettingsManager,
 ): Promise<SessionManager> {
 	if (parsed.noSession || parsed.help || parsed.listModels !== undefined) {
 		return SessionManager.inMemory(cwd, parsed.sessionId !== undefined ? { id: parsed.sessionId } : undefined);
@@ -406,20 +404,7 @@ export async function createSessionManager(
 	}
 
 	if (parsed.resume) {
-		try {
-			const selectedPath = await selectSession(
-				(onProgress) => SessionManager.list(cwd, sessionDir, onProgress),
-				(onProgress) => SessionManager.listAll(sessionDir, onProgress),
-				settingsManager,
-			);
-			if (!selectedPath) {
-				console.log(chalk.dim("No session selected"));
-				process.exit(0);
-			}
-			return SessionManager.open(selectedPath, sessionDir);
-		} finally {
-			stopThemeWatcher();
-		}
+		return SessionManager.inMemory(cwd);
 	}
 
 	if (parsed.continue) {
@@ -671,7 +656,7 @@ export async function main(args: string[], options?: MainOptions) {
 		(parsed.sessionDir ? normalizePath(parsed.sessionDir) : undefined) ??
 		(envSessionDir ? expandTildePath(envSessionDir) : undefined) ??
 		startupSettingsManager.getSessionDir();
-	let sessionManager = await createSessionManager(parsed, cwd, sessionDir, startupSettingsManager);
+	let sessionManager = await createSessionManager(parsed, cwd, sessionDir);
 	const missingSessionCwdIssue = getMissingSessionCwdIssue(sessionManager, cwd);
 	if (missingSessionCwdIssue) {
 		if (appMode === "interactive") {
@@ -685,13 +670,13 @@ export async function main(args: string[], options?: MainOptions) {
 			process.exit(1);
 		}
 	}
-	if (parsed.name !== undefined) {
-		const name = normalizeSessionName(parsed.name);
-		if (name === undefined) {
-			console.error(chalk.red("Error: --name requires a non-empty value"));
-			process.exit(1);
-		}
-		sessionManager.appendSessionInfo(name);
+	const startupSessionName = parsed.name === undefined ? undefined : normalizeSessionName(parsed.name);
+	if (parsed.name !== undefined && startupSessionName === undefined) {
+		console.error(chalk.red("Error: --name requires a non-empty value"));
+		process.exit(1);
+	}
+	if (startupSessionName !== undefined && !parsed.resume) {
+		sessionManager.appendSessionInfo(startupSessionName);
 	}
 	time("createSessionManager");
 
@@ -927,6 +912,8 @@ export async function main(args: string[], options?: MainOptions) {
 		await runRpcMode(runtime);
 	} else if (appMode === "interactive") {
 		const interactiveMode = new InteractiveMode(runtime, {
+			startupResume: parsed.resume,
+			startupSessionName: parsed.resume ? startupSessionName : undefined,
 			migratedProviders,
 			startupDiagnostics,
 			modelFallbackMessage,
