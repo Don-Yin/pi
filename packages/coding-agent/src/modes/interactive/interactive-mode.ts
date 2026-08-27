@@ -1838,118 +1838,24 @@ export class InteractiveMode {
 				addLoadedSection("Prompts", promptTokenTable, promptTokenTable);
 			}
 
-			const hookCounts = new Map<string, number>();
-			const hookOwners = new Map<string, Map<string, number>>();
+			const hookEvents = new Set<string>();
+			let hookCount = 0;
 			for (const extension of this.session.resourceLoader.getExtensions().extensions) {
 				if (extension.hidden || !extension.handlers) continue;
-				const collection = extension.sourceInfo?.collection ?? "Other";
 				for (const [eventName, registered] of extension.handlers) {
 					if (!registered || registered.length === 0) continue;
-					hookCounts.set(eventName, (hookCounts.get(eventName) ?? 0) + registered.length);
-					const owners = hookOwners.get(eventName) ?? new Map<string, number>();
-					owners.set(collection, (owners.get(collection) ?? 0) + registered.length);
-					hookOwners.set(eventName, owners);
+					hookEvents.add(eventName);
+					hookCount += registered.length;
 				}
 			}
-			if (hookCounts.size > 0) {
-				const hookPhases: Array<[string, string[]]> = [
-					["Startup", ["project_trust", "session_start", "resources_discover"]],
-					[
-						"Session",
-						[
-							"session_info_changed",
-							"session_before_switch",
-							"session_before_fork",
-							"session_before_compact",
-							"session_compact",
-							"session_before_tree",
-							"session_tree",
-							"session_shutdown",
-						],
-					],
-					["Prompt & agent", ["input", "before_agent_start", "agent_start", "agent_end", "agent_settled"]],
-					[
-						"Provider",
-						[
-							"before_provider_headers",
-							"before_provider_request",
-							"after_provider_response",
-							"model_select",
-							"thinking_level_select",
-						],
-					],
-					[
-						"Messages & turns",
-						["turn_start", "context", "message_start", "message_update", "message_end", "turn_end"],
-					],
-					[
-						"Tools & shell",
-						[
-							"tool_execution_start",
-							"tool_call",
-							"tool_execution_update",
-							"tool_result",
-							"tool_execution_end",
-							"user_bash",
-						],
-					],
-				];
-				const knownEvents = new Set(hookPhases.flatMap(([, events]) => events));
-				const otherEvents = [...hookCounts.keys()]
-					.filter((name) => !knownEvents.has(name))
-					.sort((a, b) => a.localeCompare(b));
-				if (otherEvents.length > 0) hookPhases.push(["Other", otherEvents]);
-				const cards = hookPhases
-					.map(([label, events]) => ({ label, events: events.filter((eventName) => hookCounts.has(eventName)) }))
-					.filter((card) => card.events.length > 0);
-				const eventWidth = Math.max(
-					...cards.flatMap((card) => [card.label.length, ...card.events.map((name) => name.length)]),
+			if (hookCount > 0) {
+				addLoadedSection(
+					"Hooks",
+					theme.fg(
+						"dim",
+						`  ${hookCount.toLocaleString("en-US")} handlers  ·  ${hookEvents.size.toLocaleString("en-US")} events`,
+					),
 				);
-				const hookOwnershipEntries = (eventName: string): Array<[string, number]> => {
-					const entries = [...(hookOwners.get(eventName) ?? new Map()).entries()];
-					return entries.some(([collection]) => collection !== "Other")
-						? entries.sort(([left], [right]) => left.localeCompare(right))
-						: [["", hookCounts.get(eventName) ?? 0]];
-				};
-				const hookOwnershipText = (eventName: string): string =>
-					hookOwnershipEntries(eventName)
-						.map(([collection, count]) =>
-							collection ? `${collection} ${count.toLocaleString("en-US")}` : count.toLocaleString("en-US"),
-						)
-						.join(" · ");
-				const renderHookOwnership = (eventName: string): string =>
-					hookOwnershipEntries(eventName)
-						.map(([collection, count]) =>
-							theme.fg(
-								collection && collection !== "Other" ? "accent" : "dim",
-								collection ? `${collection} ${count.toLocaleString("en-US")}` : count.toLocaleString("en-US"),
-							),
-						)
-						.join(theme.fg("muted", " · "));
-				const countWidth = Math.max(
-					...[...hookCounts.keys()].map((eventName) => hookOwnershipText(eventName).length),
-				);
-				const interiorWidth = eventWidth + countWidth + 4;
-				const hookLines: string[] = [];
-				for (let index = 0; index < cards.length; index += 3) {
-					const cardRow = cards.slice(index, index + 3);
-					const bodyHeight = Math.max(...cardRow.map((card) => card.events.length));
-					hookLines.push(
-						`  ${cardRow.map((card) => theme.fg("muted", `╭─ ${card.label} ${"─".repeat(interiorWidth - card.label.length - 3)}╮`)).join("  ")}`,
-					);
-					for (let lineIndex = 0; lineIndex < bodyHeight; lineIndex += 1) {
-						const columns = cardRow.map((card) => {
-							const eventName = card.events[lineIndex];
-							if (!eventName) return theme.fg("dim", `│${" ".repeat(interiorWidth)}│`);
-							const ownership = hookOwnershipText(eventName);
-							return `${theme.fg("dim", `│ ${eventName.padEnd(eventWidth)}  ${" ".repeat(countWidth - ownership.length)}`)}${renderHookOwnership(eventName)}${theme.fg("dim", " │")}`;
-						});
-						hookLines.push(`  ${columns.join("  ")}`);
-					}
-					hookLines.push(`  ${cardRow.map(() => theme.fg("muted", `╰${"─".repeat(interiorWidth)}╯`)).join("  ")}`);
-				}
-				const hookBody = hookLines.join("\n");
-				addLoadedSection("Hooks", hookBody, hookBody);
 			}
 
 			if (extensions.length > 0) {

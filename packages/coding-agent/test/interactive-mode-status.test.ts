@@ -69,6 +69,8 @@ function normalizeRenderedOutput(container: Container, width = 220): string {
 type ExtensionFixture = {
 	path: string;
 	sourceInfo?: SourceInfo;
+	handlers?: Map<string, unknown[]>;
+	hidden?: boolean;
 };
 
 describe("InteractiveMode.showStatus", () => {
@@ -820,7 +822,8 @@ describe("InteractiveMode.showLoadedResources", () => {
 
 		const output = normalizeRenderedOutput(fakeThis.loadedResourcesContainer);
 		expect(output).toContain("[Skills] 1 · Harness Pi 1");
-		expect(output).toContain("tool_call      Harness Pi 1");
+		expect(output).toContain("[Hooks]\n  1 handlers  ·  1 events");
+		expect(output).not.toContain("tool_call");
 		expect(output).toContain("Harness Pi · Other");
 		expect(output).toContain("answer.ts");
 	});
