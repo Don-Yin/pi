@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ENV_AGENT_DIR } from "../src/config.ts";
+import { createSessionManager } from "../src/main.ts";
 
 const cliPath = resolve(__dirname, "../src/cli.ts");
 const tempDirs: string[] = [];
@@ -106,6 +107,26 @@ function setup(): CliDirs {
 	createSessionFile(dirs.projectDir, dirs.sessionFile);
 	return dirs;
 }
+
+describe("startup resume", () => {
+	it("boots an ephemeral configured runtime before session selection", async () => {
+		const dirs = setup();
+		const manager = await createSessionManager(
+			{
+				resume: true,
+				messages: [],
+				fileArgs: [],
+				unknownFlags: new Map(),
+				diagnostics: [],
+			},
+			dirs.projectDir,
+			undefined,
+		);
+
+		expect(manager.getSessionFile()).toBeUndefined();
+		expect(manager.getCwd()).toBe(dirs.projectDir);
+	});
+});
 
 describe("startup session name", () => {
 	it("sets --name on the selected session before runtime model validation", async () => {
