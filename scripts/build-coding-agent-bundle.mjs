@@ -11,7 +11,12 @@ const repoRoot = resolve(scriptDir, "..");
 const codingAgentDir = join(repoRoot, "packages", "coding-agent");
 const aiDistDir = join(repoRoot, "packages", "ai", "dist");
 const codingAgentDistDir = join(codingAgentDir, "dist");
-const bundleDir = join(codingAgentDistDir, "bundle");
+export function resolveBundleDir(environment = process.env) {
+	return environment.PI_BUNDLE_OUTPUT_DIR
+		? resolve(environment.PI_BUNDLE_OUTPUT_DIR)
+		: join(codingAgentDistDir, "bundle");
+}
+const bundleDir = resolveBundleDir();
 const banner = {
 	js: 'import { createRequire as __piCreateRequire } from "node:module"; const require = __piCreateRequire(import.meta.url);',
 };
