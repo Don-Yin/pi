@@ -354,6 +354,10 @@ export interface InteractiveModeOptions {
 	tuiMode?: TuiMode;
 	/** Initial interactive theme setting for this invocation. */
 	initialThemeSetting?: string;
+	/** Open the session selector after configured startup resources bind. */
+	startupResume?: boolean;
+	/** Optional name to apply to the selected startup session. */
+	startupSessionName?: string;
 }
 
 interface InteractiveTuiOptions {
@@ -1153,6 +1157,14 @@ export class InteractiveMode {
 		}
 
 		void this.maybeWarnAboutAnthropicSubscriptionAuth();
+
+		if (this.options.startupResume) {
+			const resumed = await this.showStartupSessionSelector();
+			if (!resumed) {
+				await this.shutdown();
+				return;
+			}
+		}
 
 		// Process initial messages
 		if (initialMessage) {
@@ -5550,15 +5562,62 @@ export class InteractiveMode {
 		});
 	}
 
+	private showStartupSessionSelector(): Promise<boolean> {
+		return new Promise((resolve) => {
+			this.showSelector((done) => {
+				const selector = this.createSessionSelector(
+					async (sessionPath) => {
+						done();
+						const result = await this.handleResumeSession(sessionPath);
+						if (!result.cancelled && this.options.startupSessionName) {
+							this.session.setSessionName(this.options.startupSessionName);
+						}
+						resolve(!result.cancelled);
+					},
+					() => {
+						done();
+						resolve(false);
+					},
+				);
+				return { component: selector, focus: selector };
+			});
+		});
+	}
+
+	private createSessionSelector(
+		onSelect: (sessionPath: string) => Promise<void>,
+		onCancel: () => void,
+	): SessionSelectorComponent {
+		return new SessionSelectorComponent(
+			(onProgress) =>
+				SessionManager.list(this.sessionManager.getCwd(), this.sessionManager.getSessionDir(), onProgress),
+			(onProgress) =>
+				this.sessionManager.usesDefaultSessionDir()
+					? SessionManager.listAll(onProgress)
+					: SessionManager.listAll(this.sessionManager.getSessionDir(), onProgress),
+			onSelect,
+			onCancel,
+			() => {
+				void this.shutdown();
+			},
+			() => this.ui.requestRender(),
+			{
+				renameSession: async (sessionFilePath: string, nextName: string | undefined) => {
+					const next = (nextName ?? "").trim();
+					if (!next) return;
+					const mgr = SessionManager.open(sessionFilePath);
+					mgr.appendSessionInfo(next);
+				},
+				showRenameHint: true,
+				keybindings: this.keybindings,
+			},
+			this.sessionManager.getSessionFile(),
+		);
+	}
+
 	private showSessionSelector(): void {
 		this.showSelector((done) => {
-			const selector = new SessionSelectorComponent(
-				(onProgress) =>
-					SessionManager.list(this.sessionManager.getCwd(), this.sessionManager.getSessionDir(), onProgress),
-				(onProgress) =>
-					this.sessionManager.usesDefaultSessionDir()
-						? SessionManager.listAll(onProgress)
-						: SessionManager.listAll(this.sessionManager.getSessionDir(), onProgress),
+			const selector = this.createSessionSelector(
 				async (sessionPath) => {
 					done();
 					await this.handleResumeSession(sessionPath);
@@ -5567,22 +5626,6 @@ export class InteractiveMode {
 					done();
 					this.ui.requestRender();
 				},
-				() => {
-					void this.shutdown();
-				},
-				() => this.ui.requestRender(),
-				{
-					renameSession: async (sessionFilePath: string, nextName: string | undefined) => {
-						const next = (nextName ?? "").trim();
-						if (!next) return;
-						const mgr = SessionManager.open(sessionFilePath);
-						mgr.appendSessionInfo(next);
-					},
-					showRenameHint: true,
-					keybindings: this.keybindings,
-				},
-
-				this.sessionManager.getSessionFile(),
 			);
 			return { component: selector, focus: selector };
 		});
