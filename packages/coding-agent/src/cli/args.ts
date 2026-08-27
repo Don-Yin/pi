@@ -10,6 +10,11 @@ import type { TuiMode } from "../core/settings-manager.ts";
 
 export type Mode = "text" | "json" | "rpc";
 
+export interface ResourceCollectionArg {
+	name: string;
+	path: string;
+}
+
 export interface Args {
 	provider?: string;
 	model?: string;
@@ -42,6 +47,7 @@ export interface Args {
 	promptTemplates?: string[];
 	noPromptTemplates?: boolean;
 	themes?: string[];
+	resourceCollections?: ResourceCollectionArg[];
 	useTheme?: string;
 	noThemes?: boolean;
 	noContextFiles?: boolean;
@@ -177,6 +183,19 @@ export function parseArgs(args: string[]): Args {
 		} else if (arg === "--theme" && i + 1 < args.length) {
 			result.themes = result.themes ?? [];
 			result.themes.push(args[++i]);
+		} else if (arg === "--resource-collection") {
+			const name = args[i + 1];
+			const path = args[i + 2];
+			if (!name || !path || name.startsWith("-") || path.startsWith("-")) {
+				result.diagnostics.push({
+					type: "error",
+					message: "--resource-collection requires a name and path",
+				});
+			} else {
+				result.resourceCollections = result.resourceCollections ?? [];
+				result.resourceCollections.push({ name, path });
+				i += 2;
+			}
 		} else if (arg === "--use-theme") {
 			const themeName = args[i + 1];
 			if (themeName === undefined || themeName.startsWith("-")) {
@@ -306,6 +325,8 @@ ${chalk.bold("Options:")}
   --prompt-template <path>       Load a prompt template file or directory (can be used multiple times)
   --no-prompt-templates, -np     Disable prompt template discovery and loading
   --theme <path>                 Load a theme file or directory (can be used multiple times)
+  --resource-collection <name> <path>
+                                 Load conventional resource directories as one labeled collection
   --use-theme <name[/name]>      Set the initial interactive theme for this run
   --no-themes                    Disable theme discovery and loading
   --no-context-files, -nc        Disable AGENTS.md and CLAUDE.md discovery and loading

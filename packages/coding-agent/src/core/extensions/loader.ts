@@ -718,7 +718,7 @@ function resolveExtensionEntries(dir: string): string[] | null {
  *
  * No recursion beyond one level. Complex packages must use package.json manifest.
  */
-function discoverExtensionsInDir(dir: string): string[] {
+export function discoverExtensionsInDir(dir: string): string[] {
 	if (!fs.existsSync(dir)) {
 		return [];
 	}

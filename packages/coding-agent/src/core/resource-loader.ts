@@ -13,6 +13,7 @@ import { createEventBus, type EventBus } from "./event-bus.ts";
 import {
 	clearExtensionCache,
 	createExtensionRuntime,
+	discoverExtensionsInDir,
 	loadExtensionFromFactory,
 	loadExtensionsCached,
 } from "./extensions/loader.ts";
@@ -156,6 +157,11 @@ export function loadProjectContextFiles(options: {
 	return contextFiles;
 }
 
+export interface ResourceCollection {
+	name: string;
+	path: string;
+}
+
 export interface DefaultResourceLoaderOptions {
 	cwd: string;
 	agentDir: string;
@@ -165,6 +171,7 @@ export interface DefaultResourceLoaderOptions {
 	additionalSkillPaths?: string[];
 	additionalPromptTemplatePaths?: string[];
 	additionalThemePaths?: string[];
+	resourceCollections?: ResourceCollection[];
 	extensionFactories?: InlineExtension[];
 	noExtensions?: boolean;
 	noSkills?: boolean;
@@ -203,6 +210,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 	private additionalSkillPaths: string[];
 	private additionalPromptTemplatePaths: string[];
 	private additionalThemePaths: string[];
+	private resourceCollections: ResourceCollection[];
 	private extensionFactories: InlineExtension[];
 	private noExtensions: boolean;
 	private noSkills: boolean;
@@ -261,10 +269,24 @@ export class DefaultResourceLoader implements ResourceLoader {
 			agentDir: this.agentDir,
 			settingsManager: this.settingsManager,
 		});
-		this.additionalExtensionPaths = options.additionalExtensionPaths ?? [];
-		this.additionalSkillPaths = options.additionalSkillPaths ?? [];
-		this.additionalPromptTemplatePaths = options.additionalPromptTemplatePaths ?? [];
-		this.additionalThemePaths = options.additionalThemePaths ?? [];
+		this.resourceCollections = (options.resourceCollections ?? []).map((collection) => ({
+			name: collection.name,
+			path: resolvePath(collection.path, this.cwd),
+		}));
+		const collectionPaths = (directory: "extensions" | "skills" | "prompts" | "themes"): string[] =>
+			this.resourceCollections
+				.map((collection) => join(collection.path, directory))
+				.filter((path) => existsSync(path));
+		this.additionalExtensionPaths = [
+			...(options.additionalExtensionPaths ?? []),
+			...collectionPaths("extensions").flatMap(discoverExtensionsInDir),
+		];
+		this.additionalSkillPaths = [...(options.additionalSkillPaths ?? []), ...collectionPaths("skills")];
+		this.additionalPromptTemplatePaths = [
+			...(options.additionalPromptTemplatePaths ?? []),
+			...collectionPaths("prompts"),
+		];
+		this.additionalThemePaths = [...(options.additionalThemePaths ?? []), ...collectionPaths("themes")];
 		this.extensionFactories = options.extensionFactories ?? [];
 		this.noExtensions = options.noExtensions ?? false;
 		this.noSkills = options.noSkills ?? false;
@@ -408,6 +430,19 @@ export class DefaultResourceLoader implements ResourceLoader {
 		// Kept on the instance so post-reload passes (extendResources) can still resolve package metadata.
 		this.resourceMetadataByPath = new Map();
 		const metadataByPath = this.resourceMetadataByPath;
+		for (const collection of this.resourceCollections) {
+			for (const directory of ["extensions", "skills", "prompts", "themes"] as const) {
+				const resourceRoot = join(collection.path, directory);
+				if (!existsSync(resourceRoot)) continue;
+				metadataByPath.set(resourceRoot, {
+					source: "collection",
+					scope: "temporary",
+					origin: "top-level",
+					baseDir: resourceRoot,
+					collection: collection.name,
+				});
+			}
+		}
 
 		this.extensionSkillSourceInfos = new Map();
 		this.extensionPromptSourceInfos = new Map();
@@ -443,11 +478,18 @@ export class DefaultResourceLoader implements ResourceLoader {
 				metadataByPath.set(r.path, { source: "cli", scope: "temporary", origin: "top-level" });
 			}
 		}
-
 		const cliEnabledExtensions = getEnabledPaths(cliExtensionPaths.extensions);
 		const cliEnabledSkills = getEnabledPaths(cliExtensionPaths.skills);
 		const cliEnabledPrompts = getEnabledPaths(cliExtensionPaths.prompts);
 		const cliEnabledThemes = getEnabledPaths(cliExtensionPaths.themes);
+		for (const [resourcePath, metadata] of metadataByPath) {
+			const collection = this.resourceCollections.find((candidate) =>
+				this.isUnderPath(resourcePath, candidate.path),
+			);
+			if (collection) {
+				metadataByPath.set(resourcePath, { ...metadata, collection: collection.name });
+			}
+		}
 
 		const extensionPaths = this.noExtensions
 			? cliEnabledExtensions
@@ -740,9 +782,13 @@ export class DefaultResourceLoader implements ResourceLoader {
 
 	private applyExtensionSourceInfo(extensions: Extension[], metadataByPath: Map<string, PathMetadata>): void {
 		for (const extension of extensions) {
-			extension.sourceInfo =
+			const sourceInfo =
 				this.findSourceInfoForPath(extension.path, undefined, metadataByPath) ??
 				this.getDefaultSourceInfoForPath(extension.path);
+			const collection = this.resourceCollections.find((candidate) =>
+				this.isUnderPath(extension.path, candidate.path),
+			);
+			extension.sourceInfo = collection ? { ...sourceInfo, collection: collection.name } : sourceInfo;
 			for (const command of extension.commands.values()) {
 				command.sourceInfo = extension.sourceInfo;
 			}
@@ -1049,12 +1095,11 @@ export class DefaultResourceLoader implements ResourceLoader {
 	}
 
 	private isUnderPath(target: string, root: string): boolean {
-		const normalizedRoot = resolve(root);
-		if (target === normalizedRoot) {
-			return true;
-		}
+		const normalizedTarget = canonicalizePath(resolve(target));
+		const normalizedRoot = canonicalizePath(resolve(root));
+		if (normalizedTarget === normalizedRoot) return true;
 		const prefix = normalizedRoot.endsWith(sep) ? normalizedRoot : `${normalizedRoot}${sep}`;
-		return target.startsWith(prefix);
+		return normalizedTarget.startsWith(prefix);
 	}
 
 	private detectExtensionConflicts(extensions: Extension[]): Array<{ path: string; message: string }> {

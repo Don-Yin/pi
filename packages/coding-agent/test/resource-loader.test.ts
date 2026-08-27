@@ -40,6 +40,41 @@ describe("DefaultResourceLoader", () => {
 			expect(loader.getThemes().themes).toEqual([]);
 		});
 
+		it("discovers and labels conventional collection resources", async () => {
+			const collectionRoot = join(tempDir, "collection");
+			const extensionsDir = join(collectionRoot, "extensions");
+			const skillDir = join(collectionRoot, "skills", "collection-skill");
+			const themesDir = join(collectionRoot, "themes");
+			mkdirSync(extensionsDir, { recursive: true });
+			mkdirSync(skillDir, { recursive: true });
+			mkdirSync(themesDir, { recursive: true });
+			writeFileSync(join(extensionsDir, "collection.ts"), "export default function() {}");
+			writeFileSync(
+				join(skillDir, "SKILL.md"),
+				"---\nname: collection-skill\ndescription: collection skill\n---\ncontent",
+			);
+			const theme = JSON.parse(
+				readFileSync(join(process.cwd(), "src", "modes", "interactive", "theme", "dark.json"), "utf-8"),
+			) as { name: string };
+			theme.name = "collection-theme";
+			writeFileSync(join(themesDir, "collection.json"), JSON.stringify(theme));
+
+			const loader = new DefaultResourceLoader({
+				cwd,
+				agentDir,
+				resourceCollections: [{ name: "Test Collection", path: collectionRoot }],
+			});
+			await loader.reload();
+
+			expect(loader.getExtensions().extensions[0]?.sourceInfo?.collection).toBe("Test Collection");
+			expect(
+				loader.getSkills().skills.find((skill) => skill.name === "collection-skill")?.sourceInfo?.collection,
+			).toBe("Test Collection");
+			expect(
+				loader.getThemes().themes.find((item) => item.name === "collection-theme")?.sourceInfo?.collection,
+			).toBe("Test Collection");
+		});
+
 		it("should discover skills from agentDir", async () => {
 			const skillsDir = join(agentDir, "skills");
 			mkdirSync(skillsDir, { recursive: true });

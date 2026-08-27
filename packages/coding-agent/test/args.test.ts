@@ -280,6 +280,31 @@ describe("parseArgs", () => {
 		});
 	});
 
+	describe("--resource-collection flag", () => {
+		test("parses repeatable collection names and roots", () => {
+			const result = parseArgs([
+				"--resource-collection",
+				"Harness Pi",
+				"./harness-pi",
+				"--resource-collection",
+				"Team Tools",
+				"./team-tools",
+			]);
+			expect(result.resourceCollections).toEqual([
+				{ name: "Harness Pi", path: "./harness-pi" },
+				{ name: "Team Tools", path: "./team-tools" },
+			]);
+		});
+
+		test("reports missing collection arguments", () => {
+			const result = parseArgs(["--resource-collection", "Harness Pi", "--print"]);
+			expect(result.diagnostics).toContainEqual({
+				type: "error",
+				message: "--resource-collection requires a name and path",
+			});
+		});
+	});
+
 	describe("--use-theme flag", () => {
 		test("parses --use-theme", () => {
 			const result = parseArgs(["--use-theme", "light"]);
