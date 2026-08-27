@@ -69,6 +69,7 @@ export interface PathMetadata {
 	scope: SourceScope;
 	origin: "package" | "top-level";
 	baseDir?: string;
+	collection?: string;
 }
 
 export interface ResolvedResource {

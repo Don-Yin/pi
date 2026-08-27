@@ -354,9 +354,9 @@ export interface InteractiveModeOptions {
 	tuiMode?: TuiMode;
 	/** Initial interactive theme setting for this invocation. */
 	initialThemeSetting?: string;
-	/** Open the session selector after configured startup resources bind. */
+	/** Open the configured session selector after startup resources bind. */
 	startupResume?: boolean;
-	/** Optional name to apply to the selected startup session. */
+	/** Optional name to apply after the startup selector switches sessions. */
 	startupSessionName?: string;
 }
 
@@ -1811,8 +1811,23 @@ export class InteractiveMode {
 
 			const skills = skillsResult.skills;
 			if (skills.length > 0) {
+				const collectionCounts = new Map<string, number>();
+				for (const skill of skills) {
+					const collection = skill.sourceInfo?.collection ?? "Other";
+					collectionCounts.set(collection, (collectionCounts.get(collection) ?? 0) + 1);
+				}
+				const namedCollections = [...collectionCounts.entries()].filter(([collection]) => collection !== "Other");
+				const ownership = namedCollections
+					.sort(([left], [right]) => left.localeCompare(right))
+					.map(([collection, count]) => theme.fg("accent", `${collection} ${count.toLocaleString("en-US")}`))
+					.join(theme.fg("muted", " · "));
+				const ownershipSuffix = ownership ? ` ${theme.fg("muted", "·")} ${ownership}` : "";
 				this.loadedResourcesContainer.addChild(
-					new Text(`${sectionHeader("Skills")} ${theme.fg("dim", skills.length.toLocaleString("en-US"))}`, 0, 0),
+					new Text(
+						`${sectionHeader("Skills")} ${theme.fg("dim", skills.length.toLocaleString("en-US"))}${ownershipSuffix}`,
+						0,
+						0,
+					),
 				);
 				this.loadedResourcesContainer.addChild(new Spacer(1));
 			}
@@ -1824,11 +1839,16 @@ export class InteractiveMode {
 			}
 
 			const hookCounts = new Map<string, number>();
+			const hookOwners = new Map<string, Map<string, number>>();
 			for (const extension of this.session.resourceLoader.getExtensions().extensions) {
 				if (extension.hidden || !extension.handlers) continue;
+				const collection = extension.sourceInfo?.collection ?? "Other";
 				for (const [eventName, registered] of extension.handlers) {
 					if (!registered || registered.length === 0) continue;
 					hookCounts.set(eventName, (hookCounts.get(eventName) ?? 0) + registered.length);
+					const owners = hookOwners.get(eventName) ?? new Map<string, number>();
+					owners.set(collection, (owners.get(collection) ?? 0) + registered.length);
+					hookOwners.set(eventName, owners);
 				}
 			}
 			if (hookCounts.size > 0) {
@@ -1885,8 +1905,29 @@ export class InteractiveMode {
 				const eventWidth = Math.max(
 					...cards.flatMap((card) => [card.label.length, ...card.events.map((name) => name.length)]),
 				);
+				const hookOwnershipEntries = (eventName: string): Array<[string, number]> => {
+					const entries = [...(hookOwners.get(eventName) ?? new Map()).entries()];
+					return entries.some(([collection]) => collection !== "Other")
+						? entries.sort(([left], [right]) => left.localeCompare(right))
+						: [["", hookCounts.get(eventName) ?? 0]];
+				};
+				const hookOwnershipText = (eventName: string): string =>
+					hookOwnershipEntries(eventName)
+						.map(([collection, count]) =>
+							collection ? `${collection} ${count.toLocaleString("en-US")}` : count.toLocaleString("en-US"),
+						)
+						.join(" · ");
+				const renderHookOwnership = (eventName: string): string =>
+					hookOwnershipEntries(eventName)
+						.map(([collection, count]) =>
+							theme.fg(
+								collection && collection !== "Other" ? "accent" : "dim",
+								collection ? `${collection} ${count.toLocaleString("en-US")}` : count.toLocaleString("en-US"),
+							),
+						)
+						.join(theme.fg("muted", " · "));
 				const countWidth = Math.max(
-					...[...hookCounts.values()].map((count) => count.toLocaleString("en-US").length),
+					...[...hookCounts.keys()].map((eventName) => hookOwnershipText(eventName).length),
 				);
 				const interiorWidth = eventWidth + countWidth + 4;
 				const hookLines: string[] = [];
@@ -1900,8 +1941,8 @@ export class InteractiveMode {
 						const columns = cardRow.map((card) => {
 							const eventName = card.events[lineIndex];
 							if (!eventName) return theme.fg("dim", `│${" ".repeat(interiorWidth)}│`);
-							const count = hookCounts.get(eventName)!.toLocaleString("en-US");
-							return theme.fg("dim", `│ ${eventName.padEnd(eventWidth)}  ${count.padStart(countWidth)} │`);
+							const ownership = hookOwnershipText(eventName);
+							return `${theme.fg("dim", `│ ${eventName.padEnd(eventWidth)}  ${" ".repeat(countWidth - ownership.length)}`)}${renderHookOwnership(eventName)}${theme.fg("dim", " │")}`;
 						});
 						hookLines.push(`  ${columns.join("  ")}`);
 					}
@@ -1976,6 +2017,7 @@ export class InteractiveMode {
 					],
 				];
 				const categorized = new Map(categoryDefinitions.map(([label]) => [label, [] as string[]]));
+				const collectionByLabel = new Map<string, string>();
 				const extensionLabels = this.getCompactExtensionLabels(extensions);
 				const otherExtensions: string[] = [];
 				for (const [index, extension] of extensions.entries()) {
@@ -1985,6 +2027,9 @@ export class InteractiveMode {
 					const fileName = pathParts.at(-1) ?? extension.path;
 					const key = fileName.replace(/\.(?:[cm]?[jt]s|tsx?)$/, "");
 					const entryKey = key === "index" ? pathParts.at(-2) : key;
+					if (extension.sourceInfo?.collection) {
+						collectionByLabel.set(label, extension.sourceInfo.collection);
+					}
 					const category = categoryDefinitions.find(
 						([, names]) =>
 							names.has(key) ||
@@ -2009,12 +2054,21 @@ export class InteractiveMode {
 					...cards.flatMap((card) => [card.label.length + 1, ...card.extensions.map((label) => label.length)]),
 				);
 				const interiorWidth = labelWidth + 2;
+				const collectionNames = [...new Set(collectionByLabel.values())].sort((a, b) => a.localeCompare(b));
 				const extensionLines = [
 					theme.fg(
 						"muted",
 						`  ${extensions.length.toLocaleString("en-US")} extensions  ·  ${cards.length.toLocaleString("en-US")} categories`,
 					),
 				];
+				if (collectionNames.length > 0) {
+					extensionLines.push(
+						`  ${[
+							...collectionNames.map((collection) => theme.fg("accent", collection)),
+							theme.fg("dim", "Other"),
+						].join(theme.fg("muted", " · "))}`,
+					);
+				}
 				for (let index = 0; index < cards.length; index += 3) {
 					const cardRow = cards.slice(index, index + 3);
 					const bodyHeight = Math.max(...cardRow.map((card) => card.extensions.length));
@@ -2024,10 +2078,9 @@ export class InteractiveMode {
 					for (let lineIndex = 0; lineIndex < bodyHeight; lineIndex += 1) {
 						const columns = cardRow.map((card) => {
 							const label = card.extensions[lineIndex];
-							return theme.fg(
-								"dim",
-								label ? `│ ${label.padEnd(labelWidth)} │` : `│${" ".repeat(interiorWidth)}│`,
-							);
+							if (!label) return theme.fg("dim", `│${" ".repeat(interiorWidth)}│`);
+							const color = collectionByLabel.has(label) ? "accent" : "dim";
+							return `${theme.fg("dim", "│ ")}${theme.fg(color, label.padEnd(labelWidth))}${theme.fg("dim", " │")}`;
 						});
 						extensionLines.push(`  ${columns.join("  ")}`);
 					}

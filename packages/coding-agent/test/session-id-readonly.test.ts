@@ -116,28 +116,16 @@ describe("--session-id", () => {
 		mkdirSync(projectDir, { recursive: true });
 		const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
 
-		const readOnly = await createSessionManager(
-			args({ sessionId: "read-only", help: true }),
-			projectDir,
-			sessionDir,
-		);
+		const readOnly = await createSessionManager(args({ sessionId: "read-only", help: true }), projectDir, sessionDir);
 		expect(readOnly.getSessionId()).toBe("read-only");
 		expect(readOnly.getSessionFile()).toBeUndefined();
 
-		const created = await createSessionManager(
-			args({ sessionId: "persisted-id" }),
-			projectDir,
-			sessionDir,
-		);
+		const created = await createSessionManager(args({ sessionId: "persisted-id" }), projectDir, sessionDir);
 		persistSession(created, "persist me");
 		expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("creating a new session"));
 
 		consoleError.mockClear();
-		const reopened = await createSessionManager(
-			args({ sessionId: "persisted-id" }),
-			projectDir,
-			sessionDir,
-		);
+		const reopened = await createSessionManager(args({ sessionId: "persisted-id" }), projectDir, sessionDir);
 		expect(reopened.getSessionFile()).toBe(created.getSessionFile());
 		expect(consoleError).not.toHaveBeenCalled();
 	});
@@ -157,11 +145,7 @@ describe("--session-id", () => {
 		});
 
 		await expect(
-			createSessionManager(
-				args({ fork: "source-id", sessionId: "existing-id" }),
-				projectDir,
-				sessionDir,
-			),
+			createSessionManager(args({ fork: "source-id", sessionId: "existing-id" }), projectDir, sessionDir),
 		).rejects.toThrow("exit:1");
 	});
 });

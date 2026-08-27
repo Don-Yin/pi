@@ -521,7 +521,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 		systemPromptSource?: { path: string };
 		appendSystemPromptSources?: Array<{ path: string }>;
 		extensions?: ExtensionFixture[];
-		skills?: Array<{ filePath: string; name: string }>;
+		skills?: Array<{ filePath: string; name: string; sourceInfo?: SourceInfo }>;
 		skillDiagnostics?: Array<{ type: "warning" | "error" | "collision"; message: string }>;
 		useRealScopeGroups?: boolean;
 	}) {
@@ -603,6 +603,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 			scope: "user" | "project" | "temporary";
 			origin: "package" | "top-level";
 			baseDir?: string;
+			collection?: string;
 		},
 	): SourceInfo {
 		return {
@@ -611,6 +612,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 			scope: options.scope,
 			origin: options.origin,
 			baseDir: options.baseDir,
+			collection: options.collection,
 		};
 	}
 
@@ -697,7 +699,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 		];
 	}
 
-	test("startup resume switches through the configured runtime", async () => {
+	test("startup resume shares session switching, naming, and cancellation behavior", async () => {
 		let onSelect: ((sessionPath: string) => Promise<void>) | undefined;
 		let onCancel: (() => void) | undefined;
 		let selectedPath: string | undefined;
@@ -787,6 +789,40 @@ describe("InteractiveMode.showLoadedResources", () => {
 		expect(output).toContain("1");
 		expect(output).not.toContain("commit");
 		expect(output).not.toContain("resource-list");
+	});
+
+	test("labels collection owned skills, hooks, and extensions", () => {
+		const harnessInfo = createSourceInfo("/tmp/harness/extensions/answer.ts", {
+			source: "collection",
+			scope: "temporary",
+			origin: "top-level",
+			baseDir: "/tmp/harness/extensions",
+			collection: "Harness Pi",
+		});
+		const extension = {
+			path: harnessInfo.path,
+			sourceInfo: harnessInfo,
+			handlers: new Map([["tool_call", [() => undefined]]]),
+		};
+		const fakeThis = createShowLoadedResourcesThis({
+			quietStartup: false,
+			extensions: [extension],
+			skills: [
+				{
+					filePath: "/tmp/harness/skills/review/SKILL.md",
+					name: "review",
+					sourceInfo: { ...harnessInfo, path: "/tmp/harness/skills/review/SKILL.md" },
+				},
+			],
+		});
+
+		(InteractiveMode as any).prototype.showLoadedResources.call(fakeThis, { force: false });
+
+		const output = normalizeRenderedOutput(fakeThis.loadedResourcesContainer);
+		expect(output).toContain("[Skills] 1 · Harness Pi 1");
+		expect(output).toContain("tool_call      Harness Pi 1");
+		expect(output).toContain("Harness Pi · Other");
+		expect(output).toContain("answer.ts");
 	});
 
 	test("renders extensions in category cards", () => {
