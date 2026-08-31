@@ -1408,6 +1408,9 @@ export interface ExtensionAPI {
 	/** Get available slash commands in the current session. */
 	getCommands(): SlashCommandInfo[];
 
+	/** Get the total number of registered pi.on() event handlers across loaded extensions. */
+	getHookCount(): number;
+
 	// =========================================================================
 	// Model and Thinking Level
 	// =========================================================================
@@ -1672,6 +1675,8 @@ export interface ExtensionRuntimeState {
 	invalidate: (message?: string) => void;
 	/** Retain an event-bus subscription until this runtime is invalidated. */
 	trackEventBusSubscription: (unsubscribe: () => void) => () => void;
+	/** Count registered pi.on() handlers across every loaded extension. */
+	getHookCount: () => number;
 	/**
 	 * Register or unregister a provider.
 	 *

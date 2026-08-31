@@ -308,6 +308,7 @@ export class ExtensionRunner {
 	) {
 		this.extensions = extensions;
 		this.runtime = runtime;
+		this.runtime.getHookCount = () => this.getHookCount();
 		this.uiContext = noOpUIContext;
 		this.cwd = cwd;
 		this.sessionManager = sessionManager;
@@ -614,6 +615,13 @@ export class ExtensionRunner {
 		for (const listener of this.errorListeners) {
 			listener(error);
 		}
+	}
+
+	getHookCount(): number {
+		let count = 0;
+		for (const extension of this.extensions)
+			for (const handlers of extension.handlers.values()) count += handlers.length;
+		return count;
 	}
 
 	hasHandlers(eventType: string): boolean {

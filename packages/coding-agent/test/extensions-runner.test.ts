@@ -966,19 +966,26 @@ describe("ExtensionRunner", () => {
 	});
 
 	describe("hasHandlers", () => {
-		it("returns true when handlers exist for event type", async () => {
+		it("reports and counts registered event handlers", async () => {
 			const extCode = `
 				export default function(pi) {
 					pi.on("tool_call", async () => undefined);
+					pi.on("tool_call", async () => undefined);
+					pi.on("session_start", () => pi.appendEntry("hook-count", pi.getHookCount()));
 				}
 			`;
 			fs.writeFileSync(path.join(extensionsDir, "handler.ts"), extCode);
 
 			const result = await discoverAndLoadExtensions([], tempDir, tempDir);
 			const runner = new ExtensionRunner(result.extensions, result.runtime, tempDir, sessionManager, modelRegistry);
+			const appendEntry = vi.fn();
+			runner.bindCore({ ...extensionActions, appendEntry }, extensionContextActions);
 
 			expect(runner.hasHandlers("tool_call")).toBe(true);
 			expect(runner.hasHandlers("agent_end")).toBe(false);
+			expect(runner.getHookCount()).toBe(3);
+			await runner.emit({ type: "session_start", reason: "startup" });
+			expect(appendEntry).toHaveBeenCalledWith("hook-count", 3);
 		});
 	});
 
